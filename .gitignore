@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment (lives alongside the project)
+../port_ml_env/
+port_ml_env/
+
+# Data — large AIS parquet files and generated datasets
+data/parquets/
+data/processed/
+data/raw/
+
+# Trained model artefacts
+models/*.pkl
+models/*.h5
+models/*.keras
+models/*.pt
+
+# Research paper PDFs — copyrighted; plain-language summaries (.md) are ours
+references/*.pdf
+
+# Spring Boot / Gradle build output
+port-scheduler-api/build/
+port-scheduler-api/.gradle/
+port-scheduler-api/bin/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Claude Code local settings
+.claude/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Scratch — throwaway experiments (keep the documented ablation)
+scratch/*
+!scratch/ablate_tid.py
