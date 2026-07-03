@@ -109,5 +109,6 @@ no manual labelling.
 | `docs/PROGRESS.md` | chronological work log incl. all experiments (also the failures) |
 | `docs/fastapi-service-explained.md` | the Python model service, line by line |
 | `docs/spring-boot-service-explained.md` | the Java scheduler + the HTTP/2 bug story |
+| `docs/request-flow-diagram.html` | visual trace of a `/schedule` request across both services |
 | `docs/xgboost-explained.md`, `docs/bigru-explained.md` | how the models work |
 | `references/*.md` | plain-language analyses of the 4 research papers |

@@ -1,0 +1,501 @@
+<style>
+  :root {
+    --paper: #eaeef2;
+    --panel: #ffffff;
+    --ink: #10222f;
+    --muted: #5c6b78;
+    --hair: #d3dbe2;
+    --client: #5b6b78;
+    --spring: #2f8f4e;
+    --fastapi: #0d8a8a;
+    --signal: #d9622a;
+    --spring-tint: #eaf5ee;
+    --fastapi-tint: #e6f3f3;
+    --client-tint: #eef1f4;
+    --signal-tint: #fbeee6;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Code", "Cascadia Mono", "Consolas", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  .wrap {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 3vw, 2rem) 4rem;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    background:
+      linear-gradient(var(--hair) 1px, transparent 1px) 0 0 / 100% 34px,
+      linear-gradient(90deg, var(--hair) 1px, transparent 1px) 0 0 / 34px 100%;
+    background-color: var(--paper);
+    background-attachment: fixed;
+    background-blend-mode: normal;
+  }
+  .wrap { position: relative; }
+  .wrap::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: var(--paper);
+    opacity: 0.72;
+    z-index: -1;
+  }
+
+  .eyebrow {
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--signal);
+  }
+
+  header.masthead {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 2px solid var(--ink);
+    margin-bottom: 2.5rem;
+  }
+  header.masthead h1 {
+    font-size: clamp(1.7rem, 4.5vw, 2.7rem);
+    line-height: 1.05;
+    margin: 0.5rem 0 0.6rem;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  header.masthead h1 .mono { font-family: var(--mono); color: var(--signal); font-weight: 600; }
+  header.masthead p {
+    margin: 0;
+    color: var(--muted);
+    max-width: 46ch;
+    font-size: 1rem;
+  }
+  .compass { flex: 0 0 auto; color: var(--ink); opacity: 0.9; }
+  @media (max-width: 620px) { .compass { display: none; } }
+
+  /* ---------- lane map ---------- */
+  h2.section {
+    font-size: 0.78rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    margin: 3rem 0 1.2rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--hair);
+  }
+
+  .map {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: stretch;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+  }
+  .lane {
+    background: var(--panel);
+    border: 1px solid var(--hair);
+    border-top: 3px solid var(--c, var(--ink));
+    border-radius: 3px;
+    padding: 1rem 1.1rem 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .lane .role { font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--c, var(--ink)); }
+  .lane .name { font-size: 1.15rem; font-weight: 700; }
+  .lane .desc { font-size: 0.85rem; color: var(--muted); }
+  .lane .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.5rem; }
+  .chip {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    padding: 0.12rem 0.42rem;
+    border-radius: 2px;
+    background: var(--t, var(--client-tint));
+    color: var(--c, var(--ink));
+    border: 1px solid color-mix(in srgb, var(--c, var(--ink)) 22%, transparent);
+    white-space: nowrap;
+  }
+  .hop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    min-width: 82px;
+    padding: 0 0.2rem;
+  }
+  .hop .label { font-family: var(--mono); font-size: 0.64rem; color: var(--signal); text-align: center; font-weight: 600; }
+  .hop .arrow {
+    width: 100%;
+    height: 2px;
+    background: repeating-linear-gradient(90deg, var(--signal) 0 7px, transparent 7px 12px);
+    position: relative;
+    animation: flow 0.9s linear infinite;
+  }
+  .hop .arrow::after {
+    content: "";
+    position: absolute;
+    right: -1px; top: 50%;
+    transform: translateY(-50%);
+    border-left: 7px solid var(--signal);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+  }
+  .hop .back { font-family: var(--mono); font-size: 0.62rem; color: var(--muted); text-align: center; }
+  @keyframes flow { to { background-position: 12px 0; } }
+  @media (prefers-reduced-motion: reduce) { .hop .arrow { animation: none; } }
+
+  @media (max-width: 720px) {
+    .map { grid-template-columns: 1fr; }
+    .hop { flex-direction: row; min-height: 48px; gap: 0.5rem; }
+    .hop .arrow { width: 2px; height: 100%; min-height: 30px; background: repeating-linear-gradient(180deg, var(--signal) 0 7px, transparent 7px 12px); }
+    .hop .arrow::after { right: 50%; top: auto; bottom: -1px; transform: translateX(50%); border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--signal); border-bottom: none; }
+  }
+
+  /* ---------- sequence ---------- */
+  .phase {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.05em;
+    color: var(--ink);
+    font-weight: 600;
+    margin: 2rem 0 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .phase::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--pc, var(--signal)); }
+  .phase.return::before { background: var(--fastapi); }
+  .phase small { color: var(--muted); font-family: var(--sans); font-weight: 400; letter-spacing: 0; }
+
+  .seq { display: flex; flex-direction: column; gap: 0.55rem; position: relative; }
+
+  .step {
+    display: grid;
+    grid-template-columns: 3rem 1fr;
+    gap: 0.9rem;
+    align-items: start;
+  }
+  .step .num {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--c, var(--ink));
+    text-align: right;
+    line-height: 1.9rem;
+    position: relative;
+  }
+  .step .card {
+    background: var(--panel);
+    border: 1px solid var(--hair);
+    border-left: 3px solid var(--c, var(--ink));
+    border-radius: 3px;
+    padding: 0.75rem 0.95rem 0.85rem;
+  }
+  .step .card h3 {
+    margin: 0 0 0.15rem;
+    font-size: 0.98rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .runs {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.4rem;
+    border-radius: 2px;
+    background: var(--t);
+    color: var(--c);
+    font-weight: 700;
+  }
+  .step .card p { margin: 0.2rem 0 0; font-size: 0.86rem; color: var(--muted); }
+  .step .card p code, .inline-code {
+    font-family: var(--mono);
+    font-size: 0.8em;
+    background: #f0f3f6;
+    padding: 0.05rem 0.3rem;
+    border-radius: 2px;
+    color: var(--ink);
+  }
+  .payload {
+    margin-top: 0.6rem;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    background: #0f2231;
+    color: #cdd9e2;
+    border-radius: 3px;
+    padding: 0.6rem 0.8rem;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .payload .k { color: #7fd1c4; }
+  .payload .hl { color: #f2a86a; font-weight: 600; background: rgba(217,98,42,0.16); border-radius: 2px; padding: 0 2px; }
+  .payload .cmt { color: #6b8091; }
+
+  .xlate {
+    margin: 0.2rem 0 0.2rem 3.9rem;
+    border: 1px dashed var(--signal);
+    background: var(--signal-tint);
+    border-radius: 3px;
+    padding: 0.6rem 0.85rem;
+    display: flex;
+    gap: 0.7rem;
+    align-items: baseline;
+  }
+  .xlate .tag { font-size: 1.1rem; line-height: 1; color: var(--signal); }
+  .xlate .body { font-size: 0.82rem; color: var(--ink); }
+  .xlate .body b { font-family: var(--mono); font-weight: 600; }
+  .xlate .body .m { color: var(--muted); display: block; margin-top: 0.15rem; }
+
+  /* service color classes */
+  .s-client   { --c: var(--client);  --t: var(--client-tint); }
+  .s-spring   { --c: var(--spring);   --t: var(--spring-tint); }
+  .s-fastapi  { --c: var(--fastapi);  --t: var(--fastapi-tint); }
+
+  /* ---------- takeaway ---------- */
+  .takeaway {
+    margin-top: 1rem;
+    background: var(--ink);
+    color: #e8eef2;
+    border-radius: 4px;
+    padding: 1.5rem 1.6rem;
+  }
+  .takeaway h2 { margin: 0 0 1rem; font-size: 1.15rem; color: #fff; }
+  .rep {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    font-size: 0.85rem;
+  }
+  .rep .layer { font-weight: 700; color: #fff; }
+  .rep .job { color: #9db2c1; }
+  .rep .shape { font-family: var(--mono); font-size: 0.76rem; color: #f2a86a; text-align: right; white-space: nowrap; }
+  .rep .divider { grid-column: 1 / -1; height: 1px; background: rgba(255,255,255,0.12); }
+  .takeaway .kicker { margin: 1.1rem 0 0; font-size: 0.92rem; color: #cdd9e2; border-top: 1px solid rgba(255,255,255,0.14); padding-top: 1rem; }
+  .takeaway .kicker b { color: #7fd1c4; }
+
+  footer.note { margin-top: 2rem; font-size: 0.8rem; color: var(--muted); font-family: var(--mono); }
+  footer.note a, .inline-code { color: inherit; }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <div class="eyebrow">Request trace &middot; ETA &amp; Berth Scheduler</div>
+      <h1>The journey of one <span class="mono">POST&nbsp;/schedule</span></h1>
+      <p>How a single ship-scheduling request travels across two services &mdash; a Java orchestration layer and a Python model &mdash; and comes back with an ETA and a berth.</p>
+    </div>
+    <svg class="compass" width="92" height="92" viewBox="0 0 92 92" fill="none" aria-hidden="true">
+      <circle cx="46" cy="46" r="43" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
+      <circle cx="46" cy="46" r="34" stroke="currentColor" stroke-width="1" opacity="0.2"/>
+      <path d="M46 8 L52 44 L46 84 L40 44 Z" fill="#d9622a"/>
+      <path d="M8 46 L44 40 L84 46 L44 52 Z" fill="currentColor" opacity="0.75"/>
+      <circle cx="46" cy="46" r="3.5" fill="currentColor"/>
+      <text x="46" y="20" text-anchor="middle" font-size="8" font-family="monospace" fill="currentColor">N</text>
+    </svg>
+  </header>
+
+  <h2 class="section">The two-hop map</h2>
+  <div class="map">
+    <div class="lane s-client" style="--c: var(--client);">
+      <span class="role">Caller</span>
+      <span class="name">Client</span>
+      <span class="desc">curl, Postman, or another system. No browser UI &mdash; just HTTP + JSON.</span>
+      <div class="chips"><span class="chip">HTTP</span><span class="chip">camelCase JSON</span></div>
+    </div>
+    <div class="hop">
+      <span class="label">POST /schedule</span>
+      <span class="arrow"></span>
+      <span class="back">&larr; 200 response</span>
+    </div>
+    <div class="lane s-spring">
+      <span class="role">Orchestration &amp; business logic</span>
+      <span class="name">Spring Boot</span>
+      <span class="desc">Validates, calls the model, then assigns a berth or queue number.</span>
+      <div class="chips"><span class="chip">Java&nbsp;21</span><span class="chip">:8080</span><span class="chip">RestClient</span></div>
+    </div>
+    <div class="hop">
+      <span class="label">POST /predict</span>
+      <span class="arrow"></span>
+      <span class="back">&larr; eta_minutes</span>
+    </div>
+    <div class="lane s-fastapi">
+      <span class="role">Pure ML inference</span>
+      <span class="name">FastAPI</span>
+      <span class="desc">Rebuilds training features and runs the XGBoost model. Knows nothing about berths.</span>
+      <div class="chips"><span class="chip">Python</span><span class="chip">:8000</span><span class="chip">XGBoost</span></div>
+    </div>
+  </div>
+
+  <h2 class="section">The itinerary, step by step</h2>
+
+  <div class="phase" style="--pc: var(--signal);">OUTBOUND <small>&mdash; from raw AIS state to a prediction</small></div>
+
+  <div class="seq">
+
+    <div class="step s-client">
+      <div class="num">1</div>
+      <div class="card">
+        <h3>Client sends the request <span class="runs">Client &rarr; Spring</span></h3>
+        <p>A vessel's current AIS state plus its destination berth, as camelCase JSON.</p>
+        <div class="payload"><span class="cmt">POST http://localhost:8080/api/ships/schedule</span>
+{ <span class="k">"vesselId"</span>: "V001",
+  <span class="k">"lat"</span>: 62.7375, <span class="k">"lon"</span>: 7.2000,
+  <span class="k">"sog"</span>: 13.0, <span class="k">"cog"</span>: 220.0,
+  <span class="hl">"destLat"</span>: 61.6021, <span class="hl">"destLon"</span>: 5.0555 }</div>
+      </div>
+    </div>
+
+    <div class="step s-spring">
+      <div class="num">2</div>
+      <div class="card">
+        <h3>Route, deserialize &amp; validate <span class="runs">Spring</span></h3>
+        <p><code>PortController.schedule()</code> receives the body. Jackson maps it to a <code>ScheduleRequest</code> record; <code>@Valid</code> checks <code>@NotBlank vesselId</code>, <code>@PositiveOrZero sog</code>, <code>@Min(0)@Max(360) cog</code>. A failure returns <code>400</code> here &mdash; nothing downstream runs.</p>
+      </div>
+    </div>
+
+    <div class="step s-spring">
+      <div class="num">3</div>
+      <div class="card">
+        <h3>Delegate to the ETA service <span class="runs">Spring</span></h3>
+        <p>The controller calls <code>etaService.predict(req)</code> first &mdash; the berth can't be assigned until the ETA is known.</p>
+      </div>
+    </div>
+
+    <div class="xlate">
+      <span class="tag">&#8646;</span>
+      <span class="body"><b>camelCase &rarr; snake_case</b>
+        <span class="m">Data-shape translation #1: <code class="inline-code">EtaRequest</code> tags its fields <code class="inline-code">@JsonProperty("dest_lat")</code> so Jackson writes snake_case &mdash; the naming the Python service expects.</span></span>
+    </div>
+
+    <div class="step s-spring">
+      <div class="num">4</div>
+      <div class="card">
+        <h3>The cross-language HTTP call <span class="runs">Spring &rarr; FastAPI</span></h3>
+        <p><code>RestClient</code> POSTs to the model service &mdash; forced to <b>HTTP/1.1</b>, because the JDK client's default HTTP/2 h2c upgrade is rejected by uvicorn and silently drops the body.</p>
+        <div class="payload"><span class="cmt">POST http://localhost:8000/predict  (HTTP/1.1)</span>
+{ <span class="k">"lat"</span>: 62.7375, <span class="k">"lon"</span>: 7.2, <span class="k">"sog"</span>: 13.0, <span class="k">"cog"</span>: 220.0,
+  <span class="hl">"dest_lat"</span>: 61.6021, <span class="hl">"dest_lon"</span>: 5.0555 }</div>
+      </div>
+    </div>
+
+    <div class="step s-fastapi">
+      <div class="num">5</div>
+      <div class="card">
+        <h3>FastAPI validates <span class="runs">FastAPI</span></h3>
+        <p>Pydantic parses the body into a <code>ShipState</code> and enforces <code>sog &ge; 0</code>, <code>0 &le; cog &le; 360</code>. Invalid input returns <code>422</code> back to Spring.</p>
+      </div>
+    </div>
+
+    <div class="step s-fastapi">
+      <div class="num">6</div>
+      <div class="card">
+        <h3>Rebuild the training features <span class="runs">FastAPI</span></h3>
+        <p><code>build_features()</code> derives the exact inputs the model trained on &mdash; <code>haversine_nm()</code> and <code>bearing_deg()</code> are <b>imported from the training module</b> so serving and training can never drift &mdash; plus the <code>naive_eta_min</code> physics prior.</p>
+        <div class="payload"><span class="cmt"># 7 features, in trained column order</span>
+distance_to_dest_nm  sog  cog  bearing_to_dest_deg
+lat  lon  naive_eta_min</div>
+      </div>
+    </div>
+
+    <div class="step s-fastapi">
+      <div class="num">7</div>
+      <div class="card">
+        <h3>Model inference <span class="runs">FastAPI</span></h3>
+        <p>Features become a one-row pandas DataFrame; <code>_model.predict(X)</code> runs the XGBoost regressor (loaded once at startup). Negative predictions are clamped to 0 &mdash; an ETA can't run backwards.</p>
+      </div>
+    </div>
+
+    <div class="step s-fastapi">
+      <div class="num">8</div>
+      <div class="card">
+        <h3>FastAPI responds <span class="runs">FastAPI &rarr; Spring</span></h3>
+        <p>Returns the prediction as JSON, <code>200 OK</code>.</p>
+        <div class="payload">{ <span class="hl">"eta_minutes"</span>: 414.0, <span class="hl">"eta_hours"</span>: 6.9,
+  <span class="k">"distance_to_dest_nm"</span>: 21.4,
+  <span class="k">"bearing_to_dest_deg"</span>: 214.8, <span class="k">"naive_eta_min"</span>: 98.8 }</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="xlate">
+    <span class="tag">&#8646;</span>
+    <span class="body"><b>snake_case &rarr; camelCase</b>
+      <span class="m">Data-shape translation #2: <code class="inline-code">EtaResponse</code> maps <code class="inline-code">eta_minutes &rarr; etaMinutes</code>. It declares only 3 fields; Jackson silently ignores the extras FastAPI sent.</span></span>
+  </div>
+
+  <div class="phase return">RETURN <small>&mdash; from a prediction to a berth assignment</small></div>
+
+  <div class="seq">
+
+    <div class="step s-spring">
+      <div class="num">9</div>
+      <div class="card">
+        <h3>Parse the ETA <span class="runs">Spring</span></h3>
+        <p><code>EtaService</code> hands a typed <code>EtaResponse</code> back to the controller. Java is once again working in camelCase.</p>
+      </div>
+    </div>
+
+    <div class="step s-spring">
+      <div class="num">10</div>
+      <div class="card">
+        <h3>Business logic &mdash; assign a berth <span class="runs">Spring</span></h3>
+        <p>Now the ETA exists, <code>berthService.assign(vesselId)</code> runs. It's <code>synchronized</code> (thread-safe): first free berth &rarr; <b>BERTHED&nbsp;B1</b>; if all 4 are full &rarr; <b>QUEUED</b> with a number from an <code>AtomicInteger</code>.</p>
+      </div>
+    </div>
+
+    <div class="step s-spring">
+      <div class="num">11</div>
+      <div class="card">
+        <h3>Assemble the answer <span class="runs">Spring</span></h3>
+        <p>The controller combines the ETA (from FastAPI) and the berth (local logic) into one <code>ScheduleResponse</code>.</p>
+      </div>
+    </div>
+
+    <div class="step s-client">
+      <div class="num">12</div>
+      <div class="card">
+        <h3>Response to the client <span class="runs">Spring &rarr; Client</span></h3>
+        <p>Serialized to JSON, <code>200 OK</code>. Round trip complete.</p>
+        <div class="payload">{ <span class="k">"vesselId"</span>: "V001",
+  <span class="hl">"etaMinutes"</span>: 414.0, <span class="hl">"etaHours"</span>: 6.9,
+  <span class="k">"status"</span>: "BERTHED",
+  <span class="k">"berthId"</span>: "B1", <span class="k">"berthName"</span>: "Berth 1",
+  <span class="k">"queueNumber"</span>: null }</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="takeaway">
+    <h2>One request, three representations</h2>
+    <div class="rep">
+      <span class="layer">Spring Boot</span>
+      <span class="job">Orchestration, validation, berth &amp; queue business logic</span>
+      <span class="shape">camelCase</span>
+      <span class="divider"></span>
+      <span class="layer">the wire</span>
+      <span class="job">The contract between a Java service and a Python one</span>
+      <span class="shape">snake_case JSON</span>
+      <span class="divider"></span>
+      <span class="layer">FastAPI</span>
+      <span class="job">Stateless feature-building + model inference only</span>
+      <span class="shape">snake_case &rarr; pandas</span>
+    </div>
+    <p class="kicker">Spring never learns how the model works; FastAPI never learns that berths exist. The <b>@JsonProperty</b> annotations are the adapters that let two naming conventions talk without either side compromising &mdash; exactly how a model gets deployed as a stateless microservice behind an application that owns the domain.</p>
+  </div>
+
+  <footer class="note">Traced from source &middot; docs/spring-boot-service-explained.md &middot; docs/fastapi-service-explained.md</footer>
+</div>
