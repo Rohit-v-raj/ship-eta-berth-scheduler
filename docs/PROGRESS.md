@@ -280,12 +280,16 @@ are gone.
 
 ## Reference summaries
 
-Plain-language write-ups of all four papers live in `references/`:
+Plain-language write-ups of all five references live in `references/`:
 `ETA-review-paper-summary.md`, `trajectory-prediction-paper-summary.md`,
-`eta-grand-challenge-2018-summary.md` (the DEBS 2018 maritime ETA system), and
+`eta-grand-challenge-2018-summary.md` (the DEBS 2018 maritime ETA system),
 `vessel-arrival-fusion-paper-summary.md` (Abdi & Amrit 2024, ESWA — a CNN+Attention+
 LSTM fusion net; the **most on-target paper**, solving our exact AIS→ETA regression
-task, and a cautionary example of a leaky random train/test split).
+task, and a cautionary example of a leaky random train/test split), and
+`queuing-theory-terminal-dimensioning-summary.md` (Santos, IST Lisbon lecture — the
+**Operations Research** foundation for the *scheduling* half: models our `BerthService`
+as an **M/M/S FCFS queue** and matches our ETA→queue design to DNV's real-world
+virtual-arrival system).
 
 ## Next step
 
@@ -294,3 +298,26 @@ Two open options, both optional:
    scheduler (tool calling), defaulting to the latest Claude models.
 2. **Bi-GRU trajectory head (bonus):** redirect the Bi-GRU to next-position
    prediction, where the ~30M per-ping samples play to a deep model's strength.
+
+## Backlog — queuing-theory features (deferred)
+
+From analysing `references/queuing-theory-terminal-dimensioning-summary.md`
+(Santos, IST Lisbon). Our `BerthService` is effectively an **M/M/S FCFS queue**;
+these turn it from an ad-hoc allocator into a data-grounded terminal model.
+Deferred by decision on 2026-07-04 — implement later. Ranked by value/effort:
+
+1. **[High] Data-grounded queuing metrics endpoint.** Estimate arrival rate **λ**
+   from `nav_status==5` arrival-event frequency and service rate **μ** from
+   mooring-segment durations (`_mooring_events` already has `arrival_time` /
+   `end_time`); with `S = port.berth.count`, compute ρ, Lq, Wq, W, P(wait) via
+   closed-form M/M/S. Expose as e.g. `GET /api/ships/terminal-stats`.
+2. **[High] Validate the Poisson/Erlang-2 arrival assumption** on our 688 real
+   arrival timestamps (notebook) — same honest-validation discipline as the
+   `length` and TID/TIY experiments. The theory *assumes* Poisson; test it.
+3. **[Medium] Berth-dimensioning calculator** — "how many berths keep Wq under a
+   target?" — answering the lecture's actual title from our λ, μ.
+4. **[Low, do anytime] Document `BerthService` in queuing terms** (M/M/S,
+   Kendall notation) in `docs/spring-boot-service-explained.md` + code comments.
+
+*Out of scope for now:* full discrete-event simulation (closed-form M/M/S covers
+our 4-berth case; DES is a much larger build).

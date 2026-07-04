@@ -62,7 +62,7 @@ port-scheduler-api/   Spring Boot 3 / Java 21 / Gradle — berth + queue REST AP
 notebooks/            Jupyter EDA (executed against the real data)
 docs/                 ROADMAP, PROGRESS (work log), WORKFLOW (runbook),
                       per-component explainers (FastAPI, Spring Boot, XGBoost…)
-references/           plain-language summaries of the 4 research papers
+references/           plain-language summaries of 4 research papers + 1 OR lecture
 data/                 raw parquets + processed voyages (not in repo — see below)
 models/               trained artefacts (not in repo)
 reports/              Excel study workbooks (generated locally, not in repo)
