@@ -12,6 +12,10 @@ data/parquets/
 data/processed/
 data/raw/
 
+# Study workbooks — contain raw AIS rows + vessel identities extracted from the
+# source dataset; regenerated locally, never redistributed (licensing).
+reports/*.xlsx
+
 # Trained model artefacts
 models/*.pkl
 models/*.h5

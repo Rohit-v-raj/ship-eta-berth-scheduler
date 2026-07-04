@@ -65,7 +65,13 @@ docs/                 ROADMAP, PROGRESS (work log), WORKFLOW (runbook),
 references/           plain-language summaries of the 4 research papers
 data/                 raw parquets + processed voyages (not in repo — see below)
 models/               trained artefacts (not in repo)
+reports/              Excel study workbooks (generated locally, not in repo)
 ```
+
+> **Note on data:** `data/`, `models/`, `reports/*.xlsx`, and the paper PDFs are
+> excluded from the repo. The study workbooks and datasets contain raw AIS rows
+> and vessel identities from the source data and are not redistributed; regenerate
+> them locally from the pipeline.
 
 ## Quick start
 
