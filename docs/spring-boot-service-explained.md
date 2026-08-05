@@ -339,6 +339,14 @@ Key ideas:
 > used only by this service, so they live inside it. Keeping them local avoids
 > cluttering the `model` package with internal helpers.
 
+> **Scope: single terminal.** The service models **one port** — one berth pool
+> (`B1`…`B4` from a single `port.berth.count`) and one shared virtual queue. There
+> is no `portId`; a `ScheduleRequest`'s destination is a coordinate, not a named
+> port, and every vessel competes for the same berths. Multi-port support (one
+> berth pool + queue per `portId`, per-port service times) would be a separate,
+> larger change and is **not** a prerequisite for the queuing / virtual-arrival
+> features in `docs/PROGRESS.md`'s backlog.
+
 ---
 
 ## 8. The controller (the endpoints)
