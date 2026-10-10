@@ -1,11 +1,11 @@
 package com.port.scheduler.controller;
 
-import com.port.scheduler.exceptions.BerthNotFoundException;
 import com.port.scheduler.model.EtaResponse;
 import com.port.scheduler.model.ScheduleRequest;
 import com.port.scheduler.model.ScheduleResponse;
 import com.port.scheduler.service.BerthService;
 import com.port.scheduler.service.EtaService;
+import com.port.scheduler.service.VesselVisitService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,17 +23,19 @@ import java.util.Map;
 public class PortController {
 
     private final EtaService etaService;
+    private final VesselVisitService vesselVisitService;
     private final BerthService berthService;
 
-    public PortController(EtaService etaService, BerthService berthService) {
+    public PortController(EtaService etaService, VesselVisitService vesselVisitService, BerthService berthService) {
         this.etaService = etaService;
+        this.vesselVisitService = vesselVisitService;
         this.berthService = berthService;
     }
 
     @PostMapping("/schedule")
     public ScheduleResponse schedule(@Valid @RequestBody ScheduleRequest req) {
         EtaResponse eta = etaService.predict(req);
-        BerthService.Assignment a = berthService.assign(req.vesselId());
+        BerthService.Assignment a = vesselVisitService.schedule(req, eta);
         return new ScheduleResponse(
                 req.vesselId(), eta.etaMinutes(), eta.etaHours(),
                 a.status(), a.berthId(), a.berthName(), a.queueNumber());
@@ -46,9 +48,6 @@ public class PortController {
 
     @PutMapping("/berths/{berthId}/release")
     public Map<String, Object> release(@PathVariable String berthId) {
-        if(!berthService.exists(berthId)) {
-            throw new BerthNotFoundException("Berth with ID " + berthId + " not found");
-        }
         boolean freed = berthService.release(berthId);
         return Map.of("berthId", berthId, "released", freed);
     }

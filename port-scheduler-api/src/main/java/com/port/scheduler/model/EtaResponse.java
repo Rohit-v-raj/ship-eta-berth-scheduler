@@ -8,5 +8,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record EtaResponse(
         @JsonProperty("eta_minutes") double etaMinutes,
         @JsonProperty("eta_hours") double etaHours,
-        @JsonProperty("distance_to_dest_nm") double distanceToDestNm
+        @JsonProperty("distance_to_dest_nm") double distanceToDestNm,
+        @JsonProperty("naive_eta_min") Double naiveEtaMin
 ) {}
