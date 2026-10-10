@@ -30,6 +30,9 @@ port-scheduler-api/build/
 port-scheduler-api/.gradle/
 port-scheduler-api/bin/
 
+# Local secrets (API key, DB password) — copy secrets.properties.example
+port-scheduler-api/secrets.properties
+
 # Jupyter
 .ipynb_checkpoints/
 
