@@ -38,7 +38,7 @@ class SchemaMigrationTest {
     void migrationsApplyFromEmptyAndSeedTheDemoPort() {
         assertThat(jdbc.queryForList(
                 "select version from flyway_schema_history where success = 1 order by installed_rank", String.class))
-                .containsExactly("1", "2", "3", "4");
+                .containsExactly("1", "2", "3", "4", "5");
         assertThat(berths.findAllByOrderBySeqAsc()).extracting(Berth::getCode)
                 .containsExactly("B1", "B2", "B3", "B4");
     }
@@ -50,6 +50,17 @@ class SchemaMigrationTest {
         assertThat(vessel.getId()).isNotNull();
         assertThat(vessel.getCreatedAt()).isNotNull();
         assertThat(vessel.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void imoNumberColumnHoldsEightCharacters() {
+        Vessel vessel = new Vessel("IMO-8");
+        vessel.setImoNumber("12345678");
+
+        vessels.saveAndFlush(vessel);
+
+        assertThat(jdbc.queryForObject("select imo_number from vessel where code = 'IMO-8'", String.class))
+                .isEqualTo("12345678");
     }
 
     @Test

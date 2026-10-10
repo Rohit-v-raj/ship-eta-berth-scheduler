@@ -35,7 +35,8 @@ public class Vessel extends BaseEntity {
     @Column(length = 100)
     private String name;
 
-    @Column(unique = true, length = 7)
+    /** Seven digits today; the IMO has said future numbers may run to eight. */
+    @Column(unique = true, length = 8)
     private String imoNumber;
 
     @Column(unique = true, length = 9)
