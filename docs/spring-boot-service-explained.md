@@ -655,9 +655,8 @@ Closest first:
 - **Arrival and berthing endpoints** — move a visit through `ARRIVED` and
   `BERTHED`, fill `ata_berth`, and turn the allocation `ACTIVE`. With actual
   arrival times stored, `eta_prediction` shows how accurate the model really is.
-- **Virtual arrival** — the slow-steaming advisor specified in
-  `docs/PROGRESS.md`: plan future berth windows and give queued vessels a
-  *requested* arrival time.
+- **Virtual arrival** — a slow-steaming advisor: plan future berth windows and
+  give queued vessels a *requested* arrival time.
 - **Real agent tools** (§12).
 - **Resilience** — a timeout / fallback in `EtaService` so a slow or down model
   service degrades gracefully instead of returning `500`.

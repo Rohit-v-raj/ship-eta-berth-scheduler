@@ -22,8 +22,12 @@ models/*.h5
 models/*.keras
 models/*.pt
 
-# Research paper PDFs — copyrighted; plain-language summaries (.md) are ours
-references/*.pdf
+# Research papers (copyrighted PDFs) and working summaries of them — kept locally
+references/
+
+# Working notes — kept locally
+docs/PROGRESS.md
+docs/domain-model-decisions.md
 
 # Spring Boot / Gradle build output
 port-scheduler-api/build/
@@ -36,8 +40,9 @@ port-scheduler-api/secrets.properties
 # Jupyter
 .ipynb_checkpoints/
 
-# Claude Code local settings
+# Claude Code local settings and instructions
 .claude/
+CLAUDE.md
 
 # OS / editor
 .DS_Store

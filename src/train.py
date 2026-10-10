@@ -38,7 +38,7 @@ FEATURES = [
 # NOTE: TID/TIY time-of-day/season one-hots (Abdi & Amrit 2024) are also carried
 # in the dataset but EXCLUDED — a 4-seed ablation (scratch/ablate_tid.py) showed
 # no consistent gain (~±0.5 min MAE), and the data spans too few months for the
-# season flags to mean anything. See docs/PROGRESS.md experiments log.
+# season flags to mean anything.
 TARGET = "minutes_to_arrival"
 
 

@@ -32,12 +32,13 @@ model has never seen:
   appears in both train and test. A random row split (used by a 2024 journal
   paper we analyzed) leaks near-duplicate 3-second pings across the split and
   inflates every metric.
-- **Honest negative results, kept in the log.** A Bi-GRU was built and lost
+- **Honest negative results.** A Bi-GRU was built and lost
   fairly to XGBoost (74.9 vs 68.4 min on identical test points) — 688 voyages
-  is too little data for a deep model, so the tree model ships. Vessel `length`
-  and time-of-day/season features from published papers were tested via seeded
-  ablations and rejected when they didn't improve held-out error
-  (`docs/PROGRESS.md` → experiments log).
+  is too little data for a deep model, so the tree model ships
+  (`docs/bigru-explained.md`). Vessel `length` and time-of-day/season features
+  from published papers were tested via seeded ablations and rejected when
+  they didn't improve held-out error (the time-of-day/season ablation is
+  `scratch/ablate_tid.py`).
 - **Hidden-missing-value handling.** AIS encodes "not available" as
   real-looking numbers (`sog=102.3`, `cog=360`, `heading=511`, `length=0`);
   everything passes through `clean_ais()` before use.
@@ -45,9 +46,8 @@ model has never seen:
   defaults to an HTTP/2 h2c upgrade that uvicorn rejects, silently dropping
   the request body. Traced via the uvicorn logs and fixed by forcing HTTP/1.1
   (`docs/spring-boot-service-explained.md`).
-- **Research-grounded choices.** Four papers analyzed, each with a
-  plain-language summary in `references/` — the model choice, target
-  construction, and split strategy all trace to published prior art.
+- **Research-grounded choices.** Four papers analyzed — the model choice,
+  target construction, and split strategy all trace to published prior art.
 
 ## Layout
 
@@ -61,9 +61,8 @@ src/                  Python pipeline
 port-scheduler-api/   Spring Boot 3 / Java 21 / Gradle — berth + queue REST API,
                       state in MySQL (Flyway migrations, terminal-system data model)
 notebooks/            Jupyter EDA (executed against the real data)
-docs/                 ROADMAP, PROGRESS (work log), WORKFLOW (runbook),
+docs/                 ROADMAP, WORKFLOW (runbook),
                       per-component explainers (FastAPI, Spring Boot, XGBoost…)
-references/           plain-language summaries of 4 research papers + 1 OR lecture
 data/                 raw parquets + processed voyages (not in repo — see below)
 models/               trained artefacts (not in repo)
 reports/              Excel study workbooks (generated locally, not in repo)
@@ -115,9 +114,7 @@ no manual labelling.
 | Doc | What it covers |
 |---|---|
 | `docs/WORKFLOW.md` | end-to-end runbook: setup → data → train → serve → test |
-| `docs/PROGRESS.md` | chronological work log incl. all experiments (also the failures) |
 | `docs/fastapi-service-explained.md` | the Python model service, line by line |
 | `docs/spring-boot-service-explained.md` | the Java scheduler + the HTTP/2 bug story |
 | `docs/request-flow-diagram.html` | visual trace of a `/schedule` request across both services |
 | `docs/xgboost-explained.md`, `docs/bigru-explained.md` | how the models work |
-| `references/*.md` | plain-language analyses of the 4 research papers |

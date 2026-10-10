@@ -3,7 +3,7 @@
 > **Status note (October 2026):** this is the original plan, and parts of it are
 > history. It mentions Maven, Java 17 and Keras, none of which were used in the
 > end. For how to run the system today see `WORKFLOW.md`; for what was actually
-> built, and why, see `PROGRESS.md`.
+> built, see the README and the per-component explainers in this folder.
 
 ## What This Project Does
 
@@ -37,7 +37,6 @@ Port_ML_project/
 │       ├── service/BerthService.java      # Berth allocation logic
 │       └── model/ShipRequest.java
 ├── requirements.txt
-├── CLAUDE.md
 └── ROADMAP.md                # This file
 ```
 

@@ -28,8 +28,8 @@
 **must** be up before Spring Boot can answer `/schedule`, because Spring Boot calls
 it. Always start Python first, Java second.
 
-All commands assume you are in the **project root**
-(`C:\Users\rohit\OneDrive\Desktop\Project\Port_ML_project`) unless stated otherwise.
+All commands assume you are in the **project root** (the folder this repo was
+cloned into) unless stated otherwise.
 The virtual environment is the sibling folder `..\port_ml_env\`.
 
 ---
@@ -357,10 +357,10 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule -H "Content-Type: appli
 
 | Topic | Doc |
 |---|---|
-| Data loading & AIS sentinels | `CLAUDE.md` (Data section), `notebooks/01_eda.ipynb` |
+| Data loading & AIS sentinels | `src/data_loader.py`, `notebooks/01_eda.ipynb` |
 | Feature engineering & labels | `src/feature_engineer.py`, `docs/baseline-approach.md` |
 | XGBoost baseline | `docs/xgboost-explained.md` |
 | Bi-GRU experiment | `docs/bigru-explained.md` |
 | FastAPI model service | `docs/fastapi-service-explained.md` |
 | Spring Boot scheduler | `docs/spring-boot-service-explained.md` |
-| Running history / decisions | `docs/PROGRESS.md`, `docs/ROADMAP.md` |
+| The original plan | `docs/ROADMAP.md` |
