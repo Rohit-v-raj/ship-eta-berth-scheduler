@@ -160,7 +160,7 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-21 tests in three classes: migrations and schema, the scheduling flow, and the
+22 tests in three classes: migrations and schema, the scheduling flow, and the
 JSON contract of `/api/ships`. The first two need MySQL running (Phase 0.3) and
 use their own schema, `port_core_test`, which is wiped and rebuilt on every run.
 They do not need FastAPI, and they never touch `port_core`.

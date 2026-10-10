@@ -90,7 +90,8 @@ port-scheduler-api/
     ├── main/resources/
     │   ├── application.properties   # config: ports, model URL, database
     │   └── db/migration/            # Flyway SQL: V1 topology, V2 vessel,
-    │                                #   V3 vessel visit, V4 demo port seed
+    │                                #   V3 vessel visit, V4 demo port seed,
+    │                                #   V5 wider IMO number
     ├── main/java/com/port/scheduler/
     │   ├── PortSchedulerApplication.java   # main() — boots the app
     │   ├── controller/
@@ -359,8 +360,10 @@ Four decisions are worth understanding:
 - **Times come in four strengths** — *estimated*, *requested*, *planned* and
   *actual* — the pattern the shipping industry uses to agree just-in-time
   arrivals. On a visit they are `eta_berth`, `rta_berth`, `pta_berth` and
-  `ata_berth`. The ML model's output is an *estimated* arrival; a slot offered by
-  the terminal would be a *requested* one.
+  `ata_berth`. The ML model's output is an *estimated* arrival. When the terminal
+  allocates a berth it records a *requested* arrival (`rta_berth`). *Planned*
+  means the vessel has confirmed that request; nothing does that yet, so
+  `pta_berth` stays empty.
 - **The database enforces the rules itself.** `berth_allocation` has a generated
   column that equals `berth_id` while the allocation is open and `NULL` once it
   is closed, with a unique index over it. MySQL therefore refuses a second open
@@ -369,7 +372,7 @@ Four decisions are worth understanding:
 - **Types are enums, not subclasses.** A container terminal and a bulk terminal
   have the same shape, so `terminal_type` is a column, not a class hierarchy.
 
-**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V4` are
+**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V5` are
 versioned SQL files applied in order at startup, and once one has been applied
 to a shared database it is never edited — changes go in a new file. Hibernate
 runs with `ddl-auto=validate`: it never alters a table, it only checks that the
@@ -422,6 +425,7 @@ public Assignment allocate(VesselVisit visit) {
 
     Berth berth = free.get(0);                               // first free berth wins
     allocationRepository.save(new BerthAllocation(visit, berth, visit.getEtaBerth()));
+    visit.setRtaBerth(visit.getEtaBerth());                  // the terminal *requests* this arrival time
     ...
     return berthed(berth);
 }
