@@ -4,8 +4,12 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.port.scheduler.exceptions.BerthNotFoundException;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -28,22 +32,26 @@ public class BerthService {
     private int berthCount;
 
     private final List<Berth> berths = new ArrayList<>();
-    private final List<String> occupiedBy = new ArrayList<>(); // parallel to berths; null = free
+    private final Map<String, Berth> berthMap = new HashMap<>();
+    private final Map<String, String> occupiedBy = new HashMap<>(); // berth id -> vessel id; null = free
     private final AtomicInteger queueCounter = new AtomicInteger(0);
 
     @PostConstruct
     void initBerths() {
         for (int i = 1; i <= berthCount; i++) {
-            berths.add(new Berth("B" + i, "Berth " + i));
-            occupiedBy.add(null);
+            Berth berth = new Berth("B" + i, "Berth " + i);
+            berths.add(berth);
+            berthMap.put(berth.id(), berth);
+            occupiedBy.put(berth.id(), null);
         }
     }
 
     /** Assign the first free berth, or a queue number if the port is full. */
     public synchronized Assignment assign(String vesselId) {
         for (int i = 0; i < berths.size(); i++) {
-            if (occupiedBy.get(i) == null) {
-                occupiedBy.set(i, vesselId);
+            Berth berth = berths.get(i);
+            if (occupiedBy.get(berth.id()) == null) {
+                occupiedBy.put(berth.id(), vesselId);
                 Berth b = berths.get(i);
                 return new Assignment("BERTHED", b.id(), b.name(), null);
             }
@@ -53,21 +61,27 @@ public class BerthService {
 
     /** Free a berth so the next vessel can use it. Returns true if it was occupied. */
     public synchronized boolean release(String berthId) {
-        for (int i = 0; i < berths.size(); i++) {
-            if (berths.get(i).id().equals(berthId) && occupiedBy.get(i) != null) {
-                occupiedBy.set(i, null);
-                return true;
-            }
+        Berth berth = berthMap.get(berthId);
+        if (berth == null) {
+            throw new BerthNotFoundException("Berth ID " + berthId + " does not exist");
         }
-        return false;
+        if (occupiedBy.get(berth.id()) == null) {
+            return false; // already free
+        }
+        occupiedBy.put(berth.id(), null);
+        return true;
     }
 
     public synchronized List<BerthStatus> status() {
         List<BerthStatus> out = new ArrayList<>();
         for (int i = 0; i < berths.size(); i++) {
             Berth b = berths.get(i);
-            out.add(new BerthStatus(b.id(), b.name(), occupiedBy.get(i) != null, occupiedBy.get(i)));
+            out.add(new BerthStatus(b.id(), b.name(), occupiedBy.get(b.id()) != null, occupiedBy.get(b.id())));
         }
         return out;
+    }
+
+    public synchronized boolean exists(String berthId) {
+        return berthMap.containsKey(berthId);
     }
 }
