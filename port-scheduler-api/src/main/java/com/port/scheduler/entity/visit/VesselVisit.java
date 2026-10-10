@@ -26,8 +26,9 @@ import java.time.Instant;
  * Berth allocations, ETA predictions and events all belong to a visit.
  *
  * The time fields hold the current value of each timestamp, named by how firm
- * it is: eta (estimated), rta (requested by the terminal), pta (planned),
- * ata / atd (actual). The history behind them is in {@link VisitEvent}.
+ * it is: eta (estimated), rta (requested by the terminal), pta (planned: the
+ * vessel's confirmation of the rta), ata / atd (actual). The history behind
+ * them is in {@link VisitEvent}.
  *
  * A vessel has at most one open visit; the database enforces this.
  */

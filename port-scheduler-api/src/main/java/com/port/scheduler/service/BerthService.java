@@ -55,9 +55,12 @@ public class BerthService {
     }
 
     /**
-     * Give the visit the first free berth, planned from its current ETA, or
-     * its queue number if the port is full. A visit that already holds a berth
-     * keeps it.
+     * Give the visit the first free berth, or its queue number if the port is
+     * full. A visit that already holds a berth keeps it.
+     *
+     * The berth is offered for the visit's current ETA. From the terminal that
+     * is a requested arrival time (RTA Berth); it becomes a planned one (PTA
+     * Berth) only when the vessel confirms it, so pta_berth is left empty here.
      */
     @Transactional
     public Assignment allocate(VesselVisit visit) {
@@ -74,9 +77,9 @@ public class BerthService {
 
         Berth berth = free.get(0);
         allocationRepository.save(new BerthAllocation(visit, berth, visit.getEtaBerth()));
-        visit.setPtaBerth(visit.getEtaBerth());
+        visit.setRtaBerth(visit.getEtaBerth());
         visit.setTerminal(berth.getQuay().getTerminal());
-        eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.PLANNED,
+        eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.REQUESTED,
                 visit.getEtaBerth(), Instant.now(), EventSource.TERMINAL, berth));
         return berthed(berth);
     }

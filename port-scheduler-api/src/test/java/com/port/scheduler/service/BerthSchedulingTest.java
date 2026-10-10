@@ -3,7 +3,11 @@ package com.port.scheduler.service;
 import com.port.scheduler.entity.vessel.Vessel;
 import com.port.scheduler.entity.visit.AllocationStatus;
 import com.port.scheduler.entity.visit.BerthAllocation;
+import com.port.scheduler.entity.visit.EventSource;
+import com.port.scheduler.entity.visit.Milestone;
+import com.port.scheduler.entity.visit.TimeClassifier;
 import com.port.scheduler.entity.visit.VesselVisit;
+import com.port.scheduler.entity.visit.VisitEvent;
 import com.port.scheduler.entity.visit.VisitPhase;
 import com.port.scheduler.exceptions.BerthNotFoundException;
 import com.port.scheduler.model.EtaResponse;
@@ -26,6 +30,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -103,7 +108,7 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void schedulingRecordsTheVisitItsEtaAndItsPlannedBerth() {
+    void schedulingRecordsTheVisitItsEtaAndTheTerminalsRequestedArrival() {
         Instant before = Instant.now();
 
         schedule("V001");
@@ -113,7 +118,9 @@ class BerthSchedulingTest {
         assertThat(visit.getPhase()).isEqualTo(VisitPhase.INBOUND);
         assertThat(visit.getVessel().getCode()).isEqualTo("V001");
         assertThat(visit.getEtaBerth()).isCloseTo(before.plus(Duration.ofMinutes(120)), within(30, ChronoUnit.SECONDS));
-        assertThat(visit.getPtaBerth()).isEqualTo(visit.getEtaBerth());
+        // the terminal requests an arrival time; only the vessel can confirm it as planned
+        assertThat(visit.getRtaBerth()).isEqualTo(visit.getEtaBerth());
+        assertThat(visit.getPtaBerth()).isNull();
         assertThat(visit.getTerminal().getCode()).isEqualTo("FRO-CT");
 
         assertThat(predictions.findAll()).singleElement().satisfies(p -> {
@@ -122,8 +129,12 @@ class BerthSchedulingTest {
             assertThat(p.getNaiveEtaMinutes()).isEqualTo(42.5);
             assertThat(p.getSogKnots()).isEqualTo(12.0);
         });
-        // one ESTIMATED arrival from the model, one PLANNED arrival from the allocation
-        assertThat(events.count()).isEqualTo(2);
+        assertThat(events.findAll())
+                .allSatisfy(e -> assertThat(e.getMilestone()).isEqualTo(Milestone.ARRIVAL_BERTH))
+                .extracting(VisitEvent::getClassifier, VisitEvent::getSource)
+                .containsExactlyInAnyOrder(
+                        tuple(TimeClassifier.ESTIMATED, EventSource.ML_MODEL),
+                        tuple(TimeClassifier.REQUESTED, EventSource.TERMINAL));
     }
 
     @Test
