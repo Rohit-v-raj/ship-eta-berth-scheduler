@@ -58,7 +58,8 @@ src/                  Python pipeline
   train.py              XGBoost ETA baseline (production model)
   train_bigru.py        Bi-GRU head-to-head experiment
   predict_api.py        FastAPI service: /health, /predict
-port-scheduler-api/   Spring Boot 3 / Java 21 / Gradle — berth + queue REST API
+port-scheduler-api/   Spring Boot 3 / Java 21 / Gradle — berth + queue REST API,
+                      state in MySQL (Flyway migrations, terminal-system data model)
 notebooks/            Jupyter EDA (executed against the real data)
 docs/                 ROADMAP, PROGRESS (work log), WORKFLOW (runbook),
                       per-component explainers (FastAPI, Spring Boot, XGBoost…)
@@ -90,12 +91,14 @@ python src/train.py
 python -m uvicorn predict_api:app --app-dir src --port 8000
 
 # 3. Run the scheduler (separate terminal)
+#    One-time setup first: MySQL with an empty `port_core` database and a
+#    secrets.properties file — see docs/WORKFLOW.md, Phase 0.3
 cd port-scheduler-api; .\gradlew bootRun
 
 # 4. Schedule a ship
 curl -X POST http://localhost:8080/api/ships/schedule -H "Content-Type: application/json" `
   -d '{"vesselId":"V001","lat":62.47,"lon":6.15,"sog":12.0,"cog":45.0,"destLat":62.47,"destLon":6.24}'
-# → {"vesselId":"V001","etaMinutes":414.0,"status":"BERTHED","berthId":"B1",...}
+# → {"vesselId":"V001","etaMinutes":98.5,"status":"BERTHED","berthId":"B1",...}
 ```
 
 ## Data

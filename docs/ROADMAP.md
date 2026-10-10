@@ -1,5 +1,10 @@
 # AI-Powered ETA & Berth Scheduler — Roadmap
 
+> **Status note (October 2026):** this is the original plan, and parts of it are
+> history. It mentions Maven, Java 17 and Keras, none of which were used in the
+> end. For how to run the system today see `WORKFLOW.md`; for what was actually
+> built, and why, see `PROGRESS.md`.
+
 ## What This Project Does
 
 Uncontrolled ship arrivals cause port congestion and delays. This system:
@@ -124,7 +129,7 @@ Response: { eta_minutes: 87, distance_to_dest_nm: 12.3 }
 
 **Goal:** Accept ship requests, fetch ETA from Python, assign berth + queue number.
 
-**Stack:** Java 17, Spring Boot 3.x, Maven
+**Stack (as built):** Java 21, Spring Boot 3.3.5, Gradle, MySQL 8 + Flyway
 
 ```
 POST /api/ships/schedule
@@ -133,20 +138,25 @@ Response: { etaMinutes, queueNumber, berthId, berthName }
 ```
 
 - `ETAService.java` — calls the FastAPI `/predict` via `RestClient`/`RestTemplate`
-- `BerthService.java` — in-memory berth state; assigns next available berth or queues the vessel
+- `BerthService.java` — assigns the next available berth or queues the vessel.
+  First built on in-memory state; now backed by MySQL on a terminal-system data
+  model (vessel visits and berth allocations)
 
 **Skills:** Spring Boot, REST controllers, HTTP client, Java OOP, Maven
 
 ---
 
-## Phase 5 — Spring AI assistant (planned)
+## Phase 5 — Spring AI assistant (started)
 
 **Goal:** A natural-language layer over the scheduler — ask arrival/berth questions
 in plain English; optionally parse unstructured inputs (weather/news) into features.
 
 - Spring AI chat model + **tool/function calling** that invokes the existing
   `/api/ships/schedule` endpoint, so the LLM answers using real predictions.
-- Default to the latest Claude models when wiring the provider.
+- Provider: **Google Gemini** (`spring-ai-starter-model-google-genai`). The
+  original plan said Claude; Gemini is what was wired in.
+- Status: `/api/agent/ping`, `/chat` and `/evaluate` exist and reach Gemini, but
+  the tools still return sample data rather than calling the scheduler.
 
 **Skills:** Spring AI, chat models, tool calling.
 

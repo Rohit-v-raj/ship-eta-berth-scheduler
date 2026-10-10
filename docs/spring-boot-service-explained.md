@@ -56,6 +56,11 @@ to the Python service.
 | **spring-boot-starter-validation** | (managed) | Validation | The `@NotBlank`, `@Min`, `@Max` checks on requests |
 | **RestClient** | (in spring-web) | HTTP client | How Java calls the Python `/predict` endpoint |
 | **Jackson** | (bundled) | JSON library | Converts Java objects ↔ JSON automatically |
+| **spring-boot-starter-data-jpa** | (managed, Hibernate 6.5) | Persistence | Maps Java entity classes to database tables |
+| **MySQL** | 8.0 | Database | Where berths, vessels, visits and allocations are stored |
+| **Flyway** | (managed) | Schema migrations | Versioned SQL files create the schema; Hibernate only validates against it |
+| **Lombok** | 1.18.36 | Boilerplate remover | Generates getters/setters on the entity classes |
+| **Spring AI** | 1.1.6 | LLM client | Calls Gemini for the harbor-master agent (§12) |
 
 A few concepts worth pinning down:
 
@@ -80,28 +85,41 @@ port-scheduler-api/
 ├── build.gradle                 # dependencies + Java version (the build recipe)
 ├── settings.gradle              # project name
 ├── gradlew / gradlew.bat        # the Gradle wrapper scripts
-└── src/main/
-    ├── resources/
-    │   └── application.properties   # config: ports, model URL, berth count
-    └── java/com/port/scheduler/
-        ├── PortSchedulerApplication.java   # main() — boots the app
-        ├── controller/
-        │   └── PortController.java          # the HTTP endpoints
-        ├── service/
-        │   ├── EtaService.java              # calls FastAPI for the ETA
-        │   └── BerthService.java            # berth + queue logic
-        └── model/
-            ├── ScheduleRequest.java         # what the client sends in
-            ├── ScheduleResponse.java        # what we send back
-            ├── EtaRequest.java              # what we send to FastAPI
-            └── EtaResponse.java             # what FastAPI sends back
+├── secrets.properties.example   # template for the gitignored secrets.properties
+└── src/
+    ├── main/resources/
+    │   ├── application.properties   # config: ports, model URL, database
+    │   └── db/migration/            # Flyway SQL: V1 topology, V2 vessel,
+    │                                #   V3 vessel visit, V4 demo port seed
+    ├── main/java/com/port/scheduler/
+    │   ├── PortSchedulerApplication.java   # main() — boots the app
+    │   ├── controller/
+    │   │   ├── PortController.java          # the /api/ships endpoints
+    │   │   └── AgentController.java         # the /api/agent endpoints (§12)
+    │   ├── service/
+    │   │   ├── EtaService.java              # calls FastAPI for the ETA
+    │   │   ├── VesselVisitService.java      # visit lifecycle: schedule a ship
+    │   │   ├── BerthService.java            # berth allocation + queue
+    │   │   └── HarborMasterAgentService.java
+    │   ├── entity/                          # what is stored (§7b)
+    │   │   ├── topology/   Port, Terminal, Quay, Berth
+    │   │   ├── vessel/     Vessel
+    │   │   └── visit/      VesselVisit, BerthAllocation, EtaPrediction, VisitEvent
+    │   ├── repository/                      # Spring Data interfaces, one per entity used
+    │   ├── model/                           # request/response records (§6)
+    │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
+    │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
+    │   └── config/JpaConfig.java            # switches on audit timestamps
+    └── test/java/com/port/scheduler/        # migration, scheduling and controller tests
 ```
 
 **The package structure follows a standard layered pattern:**
 
 - **controller** = the web layer (handles HTTP, knows nothing about *how* things work).
 - **service** = the logic layer (the actual work: calling the model, assigning berths).
-- **model** = the data layer (plain data shapes — the "nouns" that flow through).
+- **repository** = the database access layer (queries, written as Java interfaces).
+- **entity** = the stored data (classes that map to database tables).
+- **model** = the wire data (plain shapes that travel as JSON — the "nouns" of the API).
 
 This separation is a convention, not a requirement — but it's how nearly every
 real Spring app is organised, and it keeps each class small and single-purpose.
@@ -116,15 +134,37 @@ server.port=8080
 
 # Base URL of the Python FastAPI ETA model service (Phase 2)
 eta.api.url=http://localhost:8000
+# Name recorded against every stored ETA prediction
+eta.model.name=eta_xgb
 
-# Number of berths available at the port (vessels beyond this are queued)
-port.berth.count=4
+# Secrets (Gemini API key, DB password) stay out of version control.
+spring.config.import=optional:file:./secrets.properties
+
+spring.datasource.url=jdbc:mysql://localhost:3306/port_core
+spring.datasource.username=dev
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.properties.hibernate.jdbc.time_zone=UTC
+spring.flyway.enabled=true
 ```
 
 These are **externalised settings** — values you can change without recompiling.
 `server.port=8080` is where this service listens. `eta.api.url` is where it finds
-the Python model. `port.berth.count=4` controls how many ships can berth before
-the rest are queued. The Java code reads these with `@Value("${...}")`.
+the Python model. The Java code reads these with `@Value("${...}")`.
+
+Three things here are worth a second look:
+
+- **Secrets are not in this file.** The Gemini API key and the database password
+  live in `secrets.properties` next to `build.gradle`, which is gitignored.
+  `spring.config.import` pulls it in at startup. Copy
+  `secrets.properties.example` to create it.
+- **`ddl-auto=validate`** means Hibernate never creates or alters tables. Flyway
+  owns the schema; Hibernate only checks the entity classes match it and refuses
+  to start if they don't.
+- **`jdbc.time_zone=UTC`** stores every timestamp in UTC regardless of the
+  database server's own time zone.
+
+There is no berth count setting any more: the berths are rows in the `berth`
+table, seeded by the `V4` migration.
 
 ---
 
@@ -190,10 +230,13 @@ annotation bridges the naming conventions of the two languages.
 public record EtaResponse(
         @JsonProperty("eta_minutes") double etaMinutes,
         @JsonProperty("eta_hours") double etaHours,
-        @JsonProperty("distance_to_dest_nm") double distanceToDestNm) {}
+        @JsonProperty("distance_to_dest_nm") double distanceToDestNm,
+        @JsonProperty("naive_eta_min") Double naiveEtaMin) {}
 ```
 
-Same trick in reverse: read Python's `eta_minutes` into our `etaMinutes`.
+Same trick in reverse: read Python's `eta_minutes` into our `etaMinutes`. The
+distance and the naive (distance ÷ speed) ETA are kept so they can be stored
+alongside each prediction.
 
 > **Why separate `ScheduleRequest` from `EtaRequest`?** The client request and the
 > model request are *different things* and may evolve independently — the client
@@ -280,72 +323,143 @@ After this, every `/predict` call logs `200 OK`.
 > Here the data was fine — it never arrived. Always read the *server's* log, not
 > just the client's error.
 
-### 7b. `BerthService` — the berth + queue logic
+### 7b. The domain model — what the database holds
 
 This is the actual business value of the system — it has nothing to do with ML.
+It began as two in-memory lists. It is now the marine side of a **terminal
+operating system (TOS)** data model in MySQL, so the state survives a restart
+and the model has room to grow.
+
+One idea organises it: **a terminal system records things that happen, attached
+to things that exist.**
+
+```
+port 1──* terminal 1──* quay 1──* berth          things that exist  (master data)
+vessel 1──* vessel_visit *──1 terminal
+vessel_visit 1──* berth_allocation *──1 berth    things that happen (transactions)
+vessel_visit 1──* eta_prediction                 history, append-only
+vessel_visit 1──* visit_event                    history, append-only
+```
+
+| Table | Kind | What one row is |
+|---|---|---|
+| `port`, `terminal`, `quay`, `berth` | master data | The infrastructure. A berth carries its physical limits (LOA, beam, draft, depth) and its coordinates |
+| `vessel` | master data | A ship, keyed by `code` (the API's `vesselId`), with optional IMO number, MMSI and dimensions |
+| `vessel_visit` | transaction | **One call of a vessel at the port** — the centre of the model |
+| `berth_allocation` | transaction | A berth window given to a visit |
+| `eta_prediction` | history | An ETA the model produced for a visit, with the inputs it used |
+| `visit_event` | history | A timestamp someone reported for a visit, and when they reported it |
+
+Four decisions are worth understanding:
+
+- **Occupancy is derived, never stored.** `berth` has no `is_occupied` column. A
+  berth is occupied *because* it has an open allocation (`PLANNED` or `ACTIVE`).
+  A boolean can only say "occupied now"; an allocation can say "occupied from
+  14:00", which the virtual-arrival feature in the backlog needs.
+- **Times come in four strengths** — *estimated*, *requested*, *planned* and
+  *actual* — the pattern the shipping industry uses to agree just-in-time
+  arrivals. On a visit they are `eta_berth`, `rta_berth`, `pta_berth` and
+  `ata_berth`. The ML model's output is an *estimated* arrival; a slot offered by
+  the terminal would be a *requested* one.
+- **The database enforces the rules itself.** `berth_allocation` has a generated
+  column that equals `berth_id` while the allocation is open and `NULL` once it
+  is closed, with a unique index over it. MySQL therefore refuses a second open
+  allocation on a berth even if two requests race past the Java check. The same
+  trick gives "one open visit per vessel".
+- **Types are enums, not subclasses.** A container terminal and a bulk terminal
+  have the same shape, so `terminal_type` is a column, not a class hierarchy.
+
+**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V4` are
+versioned SQL files applied in order at startup, and once one has been applied
+to a shared database it is never edited — changes go in a new file. Hibernate
+runs with `ddl-auto=validate`: it never alters a table, it only checks that the
+entity classes match what Flyway built.
+
+**What is in the database to begin with?** `V4` seeds one demo port — Florø,
+the busiest mooring area in the project's AIS data — with two terminals and
+berths `B1`…`B4` at mooring positions observed in that data. The terminal names,
+types and berth dimensions are invented.
+
+### 7c. `VesselVisitService` and `BerthService` — the scheduling logic
+
+Scheduling a ship is one database transaction in `VesselVisitService`:
 
 ```java
-@Service
-public class BerthService {
-    public record Berth(String id, String name) {}
-    public record Assignment(String status, String berthId, String berthName, Integer queueNumber) {}
-    public record BerthStatus(String id, String name, boolean occupied, String vesselId) {}
+@Transactional
+public BerthService.Assignment schedule(ScheduleRequest req, EtaResponse eta) {
+    Instant now = Instant.now();
+    Instant predictedArrival = now.plusSeconds(Math.round(eta.etaMinutes() * 60));
 
-    @Value("${port.berth.count:4}")
-    private int berthCount;
+    Vessel vessel = vesselRepository.findByCode(req.vesselId())             // 1) know the ship
+            .orElseGet(() -> vesselRepository.save(new Vessel(req.vesselId())));
+    VesselVisit visit = visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED)
+            .orElseGet(() -> visitRepository.save(                          // 2) open or reuse its visit
+                    new VesselVisit(newVisitRef(now), vessel, VisitPhase.INBOUND)));
+    visit.setEtaBerth(predictedArrival);
 
-    private final List<Berth> berths = new ArrayList<>();
-    private final List<String> occupiedBy = new ArrayList<>(); // parallel list; null = free
-    private final AtomicInteger queueCounter = new AtomicInteger(0);
+    predictionRepository.save(EtaPrediction.builder()...build());           // 3) keep the prediction
+    eventRepository.save(VisitEvent.of(visit, ARRIVAL_BERTH, ESTIMATED, ...));
 
-    @PostConstruct
-    void initBerths() {
-        for (int i = 1; i <= berthCount; i++) {
-            berths.add(new Berth("B" + i, "Berth " + i));
-            occupiedBy.add(null);
-        }
+    return berthService.allocate(visit);                                    // 4) berth, or queue
+}
+```
+
+`BerthService.allocate` then decides between a berth and the queue:
+
+```java
+@Transactional
+public Assignment allocate(VesselVisit visit) {
+    Optional<BerthAllocation> held = allocationRepository.findByVisitAndStatusIn(visit, AllocationStatus.OPEN);
+    if (held.isPresent()) {
+        return berthed(held.get().getBerth());              // already has a berth: keep it
     }
 
-    public synchronized Assignment assign(String vesselId) {
-        for (int i = 0; i < berths.size(); i++) {
-            if (occupiedBy.get(i) == null) {            // first free berth wins
-                occupiedBy.set(i, vesselId);
-                Berth b = berths.get(i);
-                return new Assignment("BERTHED", b.id(), b.name(), null);
-            }
-        }
-        return new Assignment("QUEUED", null, null, queueCounter.incrementAndGet());
+    List<Berth> free = berthRepository.findFreeForUpdate(OperationalStatus.ACTIVE, AllocationStatus.OPEN);
+    if (free.isEmpty()) {                                    // port full: where is it in the queue?
+        List<Long> queue = visitRepository.findWaitingIds(VisitPhase.CLOSED, AllocationStatus.OPEN);
+        return new Assignment("QUEUED", null, null, queue.indexOf(visit.getId()) + 1);
     }
 
-    public synchronized boolean release(String berthId) { ... }   // free a berth
-    public synchronized List<BerthStatus> status() { ... }         // list occupancy
+    Berth berth = free.get(0);                               // first free berth wins
+    allocationRepository.save(new BerthAllocation(visit, berth, visit.getEtaBerth()));
+    ...
+    return berthed(berth);
 }
 ```
 
 Key ideas:
-- **`@PostConstruct initBerths()`** runs once after the service is created, building
-  berths `B1`…`B4` (count from config). All start free (`null`).
-- **State is in-memory:** two parallel lists — `berths` (the fixed spots) and
-  `occupiedBy` (who's in each spot, `null` = empty). This is deliberately simple
-  for a demo; a real system would use a database so state survives a restart.
-- **`assign()`** is **first-fit**: walk the berths, take the first empty one. If all
-  are full, hand out the next **queue number** instead.
-- **`synchronized`** makes the methods **thread-safe**. A web server handles many
-  requests at once; without `synchronized`, two ships could be handed the *same*
-  berth in a race. `synchronized` ensures one assignment finishes before the next
-  starts. `AtomicInteger` gives a similarly race-free counter for queue numbers.
+- **`@Transactional`** — everything in the method commits together or not at all.
+  A half-scheduled ship (a visit with no prediction, say) cannot exist.
+- **Allocation is still first-fit**: take the first free berth in `seq` order. If
+  none is free, the ship is queued. It does not yet check that the ship fits the
+  berth or matches the terminal type; the data for that is now in place.
+- **The queue is a query, not a counter.** A queue number is the visit's position
+  among open visits that hold no berth, oldest first. It is stored nowhere, so it
+  cannot drift, and it survives a restart.
+- **`FOR UPDATE` replaces `synchronized`.** `findFreeForUpdate` locks the berth
+  rows it reads until the transaction ends, so two requests arriving together
+  cannot both take the same berth. This works across several running copies of
+  the service, which `synchronized` never could.
+- **A second request from the same vessel is a position update.** It refreshes
+  the open visit's ETA and stores another prediction; it does not take a second
+  berth. A vessel gets a new visit only after the previous one has departed.
+- **The model is called before the transaction**, in the controller. An HTTP
+  call to another service should not hold a database transaction open.
 
-> **Why nested records?** `Berth`, `Assignment`, `BerthStatus` are tiny data shapes
-> used only by this service, so they live inside it. Keeping them local avoids
+`release(berthId)` closes the open allocation and marks the visit `DEPARTED`.
+It does not yet hand the berth to the head of the queue; the next request to
+arrive takes it. Promoting the queue on release is the first follow-up.
+
+> **Why nested records?** `Assignment` and `BerthStatus` are tiny data shapes
+> returned only by this service, so they live inside it. Keeping them local avoids
 > cluttering the `model` package with internal helpers.
 
-> **Scope: single terminal.** The service models **one port** — one berth pool
-> (`B1`…`B4` from a single `port.berth.count`) and one shared virtual queue. There
-> is no `portId`; a `ScheduleRequest`'s destination is a coordinate, not a named
-> port, and every vessel competes for the same berths. Multi-port support (one
-> berth pool + queue per `portId`, per-port service times) would be a separate,
-> larger change and is **not** a prerequisite for the queuing / virtual-arrival
-> features in `docs/PROGRESS.md`'s backlog.
+> **Scope: one port, several typed terminals.** The seed data models a single
+> port. Terminals have a type, and every berth belongs to a terminal through its
+> quay, but all vessels currently compete for all berths. Matching a vessel to a
+> terminal type and checking it fits the berth are follow-ups the model already
+> supports. Several ports would mean adding a port to the request; nothing in
+> the schema stands in the way.
 
 ---
 
@@ -357,17 +471,20 @@ Key ideas:
 public class PortController {
 
     private final EtaService etaService;
+    private final VesselVisitService vesselVisitService;
     private final BerthService berthService;
 
-    public PortController(EtaService etaService, BerthService berthService) {
-        this.etaService = etaService;       // Spring injects both services here
+    public PortController(EtaService etaService, VesselVisitService vesselVisitService,
+                          BerthService berthService) {
+        this.etaService = etaService;       // Spring injects all three services here
+        this.vesselVisitService = vesselVisitService;
         this.berthService = berthService;
     }
 
     @PostMapping("/schedule")
     public ScheduleResponse schedule(@Valid @RequestBody ScheduleRequest req) {
         EtaResponse eta = etaService.predict(req);              // 1) get ETA from Python
-        BerthService.Assignment a = berthService.assign(req.vesselId()); // 2) assign berth
+        BerthService.Assignment a = vesselVisitService.schedule(req, eta); // 2) record + assign
         return new ScheduleResponse(                            // 3) combine + return
                 req.vesselId(), eta.etaMinutes(), eta.etaHours(),
                 a.status(), a.berthId(), a.berthName(), a.queueNumber());
@@ -376,7 +493,7 @@ public class PortController {
     @GetMapping("/berths")
     public List<BerthService.BerthStatus> berths() { return berthService.status(); }
 
-    @PostMapping("/berths/{berthId}/release")
+    @PutMapping("/berths/{berthId}/release")
     public Map<String, Object> release(@PathVariable String berthId) {
         boolean freed = berthService.release(berthId);
         return Map.of("berthId", berthId, "released", freed);
@@ -399,10 +516,14 @@ The three endpoints:
 |---------------|---------|
 | `POST /api/ships/schedule` | The main one: ETA + berth/queue assignment |
 | `GET /api/ships/berths` | See which berths are occupied and by whom |
-| `POST /api/ships/berths/{id}/release` | Free a berth (demo lifecycle) |
+| `PUT /api/ships/berths/{id}/release` | Free a berth (demo lifecycle) |
+
+Releasing a berth that does not exist returns `404` with a JSON error body
+(`BerthNotFoundException`, turned into a response by `GlobalExceptionHandler`).
+Releasing one that is already free returns `200` with `"released": false`.
 
 **Dependency injection:** notice `PortController` never does `new EtaService(...)`.
-It just declares the two services as constructor parameters, and **Spring supplies
+It just declares the services as constructor parameters, and **Spring supplies
 them**. This is "inversion of control" — Spring owns object creation and wiring, so
 your classes stay decoupled and testable.
 
@@ -410,7 +531,19 @@ your classes stay decoupled and testable.
 
 ## 9. How to run it
 
-You need **both** services running. Start Python first (the model), then Java.
+**Once, before the first run:**
+
+1. MySQL 8 running on `localhost:3306`, with an empty database called
+   `port_core` and a user that can create tables in it. The user name is
+   `spring.datasource.username` in `application.properties`.
+2. In `port-scheduler-api/`, copy `secrets.properties.example` to
+   `secrets.properties` and fill in the database password and a Google AI
+   Studio API key.
+
+Flyway builds the tables and seeds the demo port the first time the service
+starts; there is no SQL to run by hand.
+
+You then need **both** services running. Start Python first (the model), then Java.
 
 **Terminal 1 — the model (from project root):**
 ```powershell
@@ -446,12 +579,24 @@ The full behaviour we verified:
 | Schedule V002–V004 | `/schedule` ×3 | `BERTHED` at B2, B3, B4 |
 | Schedule V005 | `/schedule` | `QUEUED`, **queueNumber 1** (port full) |
 | Check berths | `GET /berths` | all 4 occupied, correct vesselIds |
-| Release B2 | `POST /berths/B2/release` | `released: true` |
+| Release B2 | `PUT /berths/B2/release` | `released: true` |
 | Schedule V006 | `/schedule` | `BERTHED` at **B2** (reused the freed spot) |
+| Restart the service, check berths | `GET /berths` | same occupancy as before the restart |
 
 That ETA of **414 min matches what FastAPI returned directly** — proof the chain
 passes data through faithfully. The berth fill → queue → release → reassign cycle
-proves the scheduling logic.
+proves the scheduling logic, and the restart proves it is stored.
+
+The same behaviour is covered by automated tests (`.\gradlew test`):
+
+| Test class | What it proves |
+|---|---|
+| `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a double-booked berth |
+| `BerthSchedulingTest` | Fill, queue, release, reassign and re-schedule, through the real services and a real database |
+| `PortControllerTest` | The JSON each endpoint returns, including the `404` and `400` cases |
+
+The first two need MySQL running. They use a separate schema, `port_core_test`,
+which is wiped and rebuilt on every run, and they refuse to touch any other.
 
 ---
 
@@ -466,24 +611,62 @@ proves the scheduling logic.
         ├──► EtaService.predict()  ──HTTP/1.1──►  FastAPI /predict  ──►  XGBoost
         │         (returns etaMinutes)
         │
-        └──► BerthService.assign()  ──►  first free berth, or queue number
-        │
+        └──► VesselVisitService.schedule()          one database transaction
+        │         ├─ vessel + visit                 (found or created)
+        │         ├─ eta_prediction, visit_event    (history rows)
+        │         └─ BerthService.allocate()  ──►  first free berth, or queue number
         ▼
    ScheduleResponse  =  ETA  +  berth/queue decision   →  back to client as JSON
 ```
 
-**Spring Boot owns the rules; Python owns the prediction.** The controller is a
-thin coordinator; the two services do the real work; the records are just the data
-flowing between them. That's the entire service.
+**Spring Boot owns the rules; Python owns the prediction; MySQL owns the
+state.** The controller is a thin coordinator, the services do the work, the
+entities are what is remembered, and the records are the data on the wire.
 
 ---
 
-## 12. What's next (optional)
+## 12. The harbor-master agent (work in progress)
 
-- **Phase 5 — Spring AI assistant:** add a natural-language layer (e.g. "where's
-  vessel V001 and when does it arrive?") using Spring AI with tool calling,
-  defaulting to the latest Claude models.
-- **Persistence:** swap the in-memory berth lists for a database so state survives
-  restarts.
-- **Resilience:** add a timeout / fallback in `EtaService` so a slow or down model
+`AgentController` exposes `/api/agent/ping`, `/chat` and `/evaluate`. They send a
+prompt to **Google Gemini** through Spring AI, with tool calling, and return a
+structured decision. The provider is Gemini rather than the Claude models the
+original roadmap suggested.
+
+The agent is not connected to the rest of the service yet. Every tool in
+`PortDispatchTools` returns fixed sample data, so its answers do not reflect the
+real berths or the real ETA model. Backing those tools with `BerthService` and
+`EtaService` is the next step for this part, along with authentication before
+any tool is allowed to change state.
+
+---
+
+## 13. What's next
+
+Closest first:
+
+- **Promote the queue on release** — when a berth frees, give it to the vessel
+  at the head of the queue instead of the next one to ask.
+- **Fit and type checks in allocation** — vessel LOA / beam / draft against the
+  berth's limits, vessel type against terminal type.
+- **Arrival and berthing endpoints** — move a visit through `ARRIVED` and
+  `BERTHED`, fill `ata_berth`, and turn the allocation `ACTIVE`. With actual
+  arrival times stored, `eta_prediction` shows how accurate the model really is.
+- **Virtual arrival** — the slow-steaming advisor specified in
+  `docs/PROGRESS.md`: plan future berth windows and give queued vessels a
+  *requested* arrival time.
+- **Real agent tools** (§12).
+- **Resilience** — a timeout / fallback in `EtaService` so a slow or down model
   service degrades gracefully instead of returning `500`.
+
+The rest of the terminal operating system is mapped but not built. Each row is a
+future set of entities and migrations:
+
+| Module | Entities |
+|---|---|
+| Planning | berth closures, cranes and crane assignment, terminal statistics (arrival rate λ, service rate μ) |
+| Commercial | shipping line, liner service, agent |
+| Cargo | container (ISO 6346), discharge and load lists per visit, holds, hazardous cargo, reefers |
+| Yard | yard block, yard slot (bay / row / tier), container position |
+| Gate | truck company, truck visit, gate transaction, appointment |
+| Equipment | equipment, work instruction |
+| Billing | tariff, service event, invoice |

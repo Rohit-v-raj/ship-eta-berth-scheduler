@@ -452,7 +452,7 @@ lat  lon  naive_eta_min</div>
       <div class="num">10</div>
       <div class="card">
         <h3>Business logic &mdash; assign a berth <span class="runs">Spring</span></h3>
-        <p>Now the ETA exists, <code>berthService.assign(vesselId)</code> runs. It's <code>synchronized</code> (thread-safe): first free berth &rarr; <b>BERTHED&nbsp;B1</b>; if all 4 are full &rarr; <b>QUEUED</b> with a number from an <code>AtomicInteger</code>.</p>
+        <p>Now the ETA exists, <code>vesselVisitService.schedule(req, eta)</code> runs as one database transaction: it finds or opens the vessel's visit and stores the prediction, then <code>berthService.allocate(visit)</code> takes the first free berth (rows locked <code>FOR UPDATE</code>) &rarr; <b>BERTHED&nbsp;B1</b>; if all 4 are full &rarr; <b>QUEUED</b> with the visit's position in the queue.</p>
       </div>
     </div>
 

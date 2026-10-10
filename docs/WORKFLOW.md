@@ -16,7 +16,7 @@
 ## The big picture
 
 ```
- PHASE 0  Setup        ─►  Python venv + JDK 21 ready
+ PHASE 0  Setup        ─►  Python venv + JDK 21 + MySQL + secrets file ready
  PHASE 1  Data         ─►  raw AIS parquet  →  feature_engineer.py  →  voyage_features.parquet
  PHASE 2  Train        ─►  train.py  →  models/eta_xgb.pkl   (test MAE ~69 min)
  PHASE 3  Serve model  ─►  predict_api.py (FastAPI)  on :8000
@@ -64,6 +64,31 @@ java -version        # need Java 21 (LTS)
 ```
 You do **not** need to install Gradle — the project ships a **Gradle wrapper**
 (`gradlew.bat`) that downloads the correct version automatically on first use.
+
+### 0.3 Database and secrets (for the Spring Boot service)
+
+The scheduler stores its state in **MySQL 8**. You need:
+
+1. MySQL running on `localhost:3306`.
+2. An empty database called `port_core`:
+   ```sql
+   CREATE DATABASE port_core;
+   ```
+3. A MySQL user that can create tables in it. Its name goes in
+   `spring.datasource.username` in
+   `port-scheduler-api/src/main/resources/application.properties` (currently `dev`).
+4. A secrets file. In `port-scheduler-api/`, copy `secrets.properties.example` to
+   `secrets.properties` and fill in two values: the database password and a
+   Google AI Studio API key (used by the harbor-master agent).
+
+`secrets.properties` is gitignored. Never put the key or the password in
+`application.properties`.
+
+You do **not** create any tables. Flyway builds them, and seeds a demo port with
+berths `B1`–`B4`, the first time the service starts.
+
+**Confirm it worked:** after the first `bootRun` (Phase 4), `SHOW TABLES` in
+`port_core` lists nine tables plus `flyway_schema_history`.
 
 ---
 
@@ -128,13 +153,19 @@ on the same window-end points). Expected result: **Bi-GRU ~74.9 min vs XGBoost
 ~68.4 min** — XGBoost wins on this dataset. Saves `models/eta_bigru.pt`. This is a
 documented experiment, **not** part of the production path.
 
-### 2.3 (Optional) Run the unit tests
+### 2.3 (Optional) Run the tests
+
+**Java (scheduler), from `port-scheduler-api/`:**
 
 ```powershell
-..\port_ml_env\Scripts\pytest                       # all tests
-..\port_ml_env\Scripts\pytest tests\test_<module>.py   # one file
+.\gradlew test
 ```
-*(Only if `pytest` is installed and a `tests/` folder exists.)*
+21 tests in three classes: migrations and schema, the scheduling flow, and the
+JSON contract of `/api/ships`. The first two need MySQL running (Phase 0.3) and
+use their own schema, `port_core_test`, which is wiped and rebuilt on every run.
+They do not need FastAPI, and they never touch `port_core`.
+
+**Python:** there are no Python tests yet; `pytest` is not in `requirements.txt`.
 
 ---
 
@@ -178,8 +209,10 @@ cd port-scheduler-api
 .\gradlew bootRun --console=plain
 ```
 
-**What it does:** compiles and launches the Java service on port 8080. First run
-downloads dependencies (slow once); later runs are fast.
+**What it does:** compiles and launches the Java service on port 8080, applies
+any pending Flyway migrations to `port_core`, and checks the entity classes
+against the schema. First run downloads dependencies (slow once); later runs are
+fast.
 
 **Confirm it's up:** the log ends with `Started PortSchedulerApplication`. Then:
 ```bash
@@ -190,6 +223,14 @@ curl http://127.0.0.1:8080/api/ships/berths
 > 🔑 Spring Boot's `EtaService` is configured (`application.properties`) to reach
 > FastAPI at `http://localhost:8000`. If FastAPI is **not** running, `/schedule`
 > will fail — start Phase 3 first.
+
+> 🔑 Berth occupancy and the queue are **stored**. Stopping the service does not
+> clear them, so a second run of Phase 5 starts from wherever the first one left
+> off. To start clean, release the berths (5.3) or empty the transaction tables:
+> ```sql
+> DELETE FROM visit_event; DELETE FROM eta_prediction;
+> DELETE FROM berth_allocation; DELETE FROM vessel_visit; DELETE FROM vessel;
+> ```
 
 ---
 
@@ -222,7 +263,7 @@ done
 ### 5.3 Check occupancy, then release & reassign
 ```bash
 curl -s http://127.0.0.1:8080/api/ships/berths          # all 4 occupied
-curl -s -X POST http://127.0.0.1:8080/api/ships/berths/B2/release   # -> {"released":true,...}
+curl -s -X PUT http://127.0.0.1:8080/api/ships/berths/B2/release    # -> {"released":true,...}
 curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
   -H "Content-Type: application/json" \
   -d '{"vesselId":"V006","lat":60.1,"lon":4.9,"sog":12.5,"cog":210.0,"destLat":60.39,"destLon":5.32}'
@@ -237,10 +278,19 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
 | 2 | Schedule V002–V004 | `BERTHED` at B2, B3, B4 |
 | 3 | Schedule V005 | `QUEUED`, queueNumber 1 |
 | 4 | `GET /berths` | all 4 occupied, correct vesselIds |
-| 5 | Release B2 | `released: true` |
+| 5 | Release B2 (`PUT`) | `released: true` |
 | 6 | Schedule V006 | `BERTHED` at B2 (reassigned) |
+| 7 | Restart Spring Boot, `GET /berths` | same four occupants as before the restart |
 
-If all six match, **the full system is working end-to-end.**
+If all seven match, **the full system is working end-to-end.**
+
+Two behaviours to know about:
+
+- Scheduling a vessel that is already scheduled (V001 again) does **not** take a
+  second berth. It refreshes that vessel's ETA and returns its current berth or
+  queue number.
+- Releasing a berth does not yet hand it to the queued vessel. V005 stays at
+  queue number 1 until it asks again, at which point it gets a free berth.
 
 ---
 
@@ -294,6 +344,12 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule -H "Content-Type: appli
 | `curl` returns `000` | Nothing listening on that port | The service isn't running — start it |
 | Port already in use | A previous run didn't shut down | Kill the PID on that port (Phase 6) |
 | Spring Boot `bootRun` fails on first run | Dependencies still downloading / wrong Java | Confirm `java -version` is 21; let the first build finish |
+| `bootRun` fails with `Access denied for user` or `Communications link failure` | MySQL not running, or `secrets.properties` missing / wrong password | Start MySQL; create `secrets.properties` from the `.example` (Phase 0.3) |
+| `bootRun` fails with `Unknown database 'port_core'` | Database not created | `CREATE DATABASE port_core;` (Phase 0.3) |
+| `bootRun` fails with `Schema-validation: missing column` or `missing table` | An entity class and the schema disagree | Add a new Flyway migration for the change; do not edit one that has been applied |
+| `bootRun` fails with `Migration checksum mismatch` | An already-applied migration file was edited | Revert the edit and put the change in a new `V<n>__*.sql` file |
+| `/schedule` gives `BERTHED`/`QUEUED` results you did not expect | State from an earlier run is still stored | Release berths or empty the transaction tables (Phase 4 note) |
+| `PUT .../release` returns `404` | No berth with that id | Use `B1`–`B4`; `GET /berths` lists them |
 
 ---
 
