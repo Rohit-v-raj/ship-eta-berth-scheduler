@@ -3,7 +3,10 @@ package com.port.scheduler.controller;
 import com.port.scheduler.exceptions.BerthNotFoundException;
 import com.port.scheduler.model.EtaResponse;
 import com.port.scheduler.service.BerthService;
+import com.port.scheduler.exceptions.VisitConflictException;
+import com.port.scheduler.exceptions.VisitNotFoundException;
 import com.port.scheduler.service.BerthService.Assignment;
+import com.port.scheduler.service.VesselVisitService.Scheduled;
 import com.port.scheduler.service.BerthService.BerthStatus;
 import com.port.scheduler.service.EtaService;
 import com.port.scheduler.service.VesselVisitService;
@@ -15,6 +18,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+
+import java.time.Instant;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -41,7 +46,7 @@ class PortControllerTest {
     @Test
     void scheduleReturnsTheEtaWithABerth() throws Exception {
         given(etaService.predict(any())).willReturn(new EtaResponse(414.0, 6.9, 21.44, 102.9));
-        given(vesselVisitService.schedule(any(), any())).willReturn(new Assignment("BERTHED", "B1", "Berth 1", null));
+        given(vesselVisitService.schedule(any(), any())).willReturn(new Scheduled(new Assignment("BERTHED", "B1", "Berth 1", null), null, null));
 
         mvc.perform(post("/api/ships/schedule").contentType(MediaType.APPLICATION_JSON).content(V001))
                 .andExpect(status().isOk())
@@ -57,13 +62,16 @@ class PortControllerTest {
     @Test
     void scheduleReturnsAQueueNumberWhenThePortIsFull() throws Exception {
         given(etaService.predict(any())).willReturn(new EtaResponse(414.0, 6.9, 21.44, 102.9));
-        given(vesselVisitService.schedule(any(), any())).willReturn(new Assignment("QUEUED", null, null, 1));
+        given(vesselVisitService.schedule(any(), any())).willReturn(new Scheduled(new Assignment("QUEUED", null, null, 1),
+                Instant.parse("2026-10-12T14:00:00Z"), 7.5));
 
         mvc.perform(post("/api/ships/schedule").contentType(MediaType.APPLICATION_JSON).content(V001))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("QUEUED"))
                 .andExpect(jsonPath("$.berthId").isEmpty())
-                .andExpect(jsonPath("$.queueNumber").value(1));
+                .andExpect(jsonPath("$.queueNumber").value(1))
+                .andExpect(jsonPath("$.requestedArrival").value("2026-10-12T14:00:00Z"))
+                .andExpect(jsonPath("$.advisedSpeedKnots").value(7.5));
     }
 
     @Test

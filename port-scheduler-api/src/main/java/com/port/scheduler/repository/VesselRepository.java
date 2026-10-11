@@ -8,4 +8,8 @@ import java.util.Optional;
 public interface VesselRepository extends JpaRepository<Vessel, Long> {
 
     Optional<Vessel> findByCode(String code);
+
+    Optional<Vessel> findByImoNumber(String imoNumber);
+
+    Optional<Vessel> findByMmsi(String mmsi);
 }

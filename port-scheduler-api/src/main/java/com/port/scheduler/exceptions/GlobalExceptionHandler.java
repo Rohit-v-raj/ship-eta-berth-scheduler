@@ -20,6 +20,24 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler
+    public ResponseEntity<BerthErrorResponse> getVisitNotFoundResponse(VisitNotFoundException e)
+    {
+        BerthErrorResponse berthErrorResponse=new BerthErrorResponse();
+        berthErrorResponse.setStatusCode(404);
+        berthErrorResponse.setMessage("Visit not found: "+e.getMessage());
+        berthErrorResponse.setTimeStamp(System.currentTimeMillis());
+        return new ResponseEntity<>(berthErrorResponse,org.springframework.http.HttpStatus.NOT_FOUND);
+    }
+    @ExceptionHandler
+    public ResponseEntity<BerthErrorResponse> getVisitConflictResponse(VisitConflictException e)
+    {
+        BerthErrorResponse berthErrorResponse=new BerthErrorResponse();
+        berthErrorResponse.setStatusCode(409);
+        berthErrorResponse.setMessage("Conflict: "+e.getMessage());
+        berthErrorResponse.setTimeStamp(System.currentTimeMillis());
+        return new ResponseEntity<>(berthErrorResponse,org.springframework.http.HttpStatus.CONFLICT);
+    }
+    @ExceptionHandler
     public ResponseEntity<BerthErrorResponse> getAiServiceErrorResponse(ServerException e)
     {
         BerthErrorResponse berthErrorResponse=new BerthErrorResponse();

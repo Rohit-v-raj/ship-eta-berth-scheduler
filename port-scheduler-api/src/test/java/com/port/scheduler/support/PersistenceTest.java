@@ -1,5 +1,7 @@
 package com.port.scheduler.support;
 
+import com.port.scheduler.dcsa.PortCallEventPublisher;
+import com.port.scheduler.dcsa.PortCallEventReceiver;
 import com.port.scheduler.config.JpaConfig;
 import com.port.scheduler.service.BerthService;
 import com.port.scheduler.service.VesselVisitService;
@@ -23,6 +25,7 @@ import java.lang.annotation.Target;
 @DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
-@Import({JpaConfig.class, CleanMigrateConfig.class, BerthService.class, VesselVisitService.class})
+@Import({JpaConfig.class, CleanMigrateConfig.class, BerthService.class, VesselVisitService.class,
+        PortCallEventPublisher.class, PortCallEventReceiver.class})
 public @interface PersistenceTest {
 }

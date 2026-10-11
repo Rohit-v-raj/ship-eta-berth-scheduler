@@ -1,8 +1,10 @@
 package com.port.scheduler.controller;
 
+import com.port.scheduler.model.ConfirmRequest;
 import com.port.scheduler.model.EtaResponse;
 import com.port.scheduler.model.ScheduleRequest;
 import com.port.scheduler.model.ScheduleResponse;
+import com.port.scheduler.model.VisitDecision;
 import com.port.scheduler.service.BerthService;
 import com.port.scheduler.service.EtaService;
 import com.port.scheduler.service.VesselVisitService;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -35,10 +38,12 @@ public class PortController {
     @PostMapping("/schedule")
     public ScheduleResponse schedule(@Valid @RequestBody ScheduleRequest req) {
         EtaResponse eta = etaService.predict(req);
-        BerthService.Assignment a = vesselVisitService.schedule(req, eta);
+        VesselVisitService.Scheduled s = vesselVisitService.schedule(req, eta);
+        BerthService.Assignment a = s.assignment();
         return new ScheduleResponse(
                 req.vesselId(), eta.etaMinutes(), eta.etaHours(),
-                a.status(), a.berthId(), a.berthName(), a.queueNumber());
+                a.status(), a.berthId(), a.berthName(), a.queueNumber(),
+                s.requestedArrival(), s.advisedSpeedKnots());
     }
 
     @GetMapping("/berths")

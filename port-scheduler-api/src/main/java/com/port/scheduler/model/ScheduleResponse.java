@@ -1,5 +1,7 @@
 package com.port.scheduler.model;
 
+import java.time.Instant;
+
 /**
  * Response: the predicted ETA plus the berth/queue assignment.
  * {@code status} is either "BERTHED" (a berth was free) or "QUEUED".
@@ -11,5 +13,9 @@ public record ScheduleResponse(
         String status,
         String berthId,
         String berthName,
-        Integer queueNumber
+        Integer queueNumber,
+        /** When the terminal asks the vessel to arrive at the berth (UTC). */
+        Instant requestedArrival,
+        /** Advisory only; present when holding the current speed would mean waiting. */
+        Double advisedSpeedKnots
 ) {}

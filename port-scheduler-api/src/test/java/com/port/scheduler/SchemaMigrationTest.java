@@ -38,7 +38,7 @@ class SchemaMigrationTest {
     void migrationsApplyFromEmptyAndSeedTheDemoPort() {
         assertThat(jdbc.queryForList(
                 "select version from flyway_schema_history where success = 1 order by installed_rank", String.class))
-                .containsExactly("1", "2", "3", "4", "5");
+                .containsExactly("1", "2", "3", "4", "5", "6");
         assertThat(berths.findAllByOrderBySeqAsc()).extracting(Berth::getCode)
                 .containsExactly("B1", "B2", "B3", "B4");
     }

@@ -80,6 +80,10 @@ public class VesselVisit extends BaseEntity {
     @Column(name = "departure_draft_m", precision = 5, scale = 2)
     private BigDecimal departureDraftMeters;
 
+    /** How long the terminal expects this visit to occupy a berth. */
+    @Column(name = "planned_service_min")
+    private Integer plannedServiceMinutes;
+
     @Column(nullable = false)
     private int priority;
 

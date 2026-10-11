@@ -71,7 +71,14 @@ public class VisitEvent {
 
     public static VisitEvent of(VesselVisit visit, Milestone milestone, TimeClassifier classifier,
                                 Instant eventTime, Instant recordedAt, EventSource source, Berth berth) {
+        return of(visit, milestone, classifier, eventTime, recordedAt, source, berth, null);
+    }
+
+    public static VisitEvent of(VesselVisit visit, Milestone milestone, TimeClassifier classifier,
+                                Instant eventTime, Instant recordedAt, EventSource source, Berth berth,
+                                String remarks) {
         VisitEvent e = new VisitEvent();
+        e.remarks = remarks;
         e.visit = visit;
         e.milestone = milestone;
         e.classifier = classifier;

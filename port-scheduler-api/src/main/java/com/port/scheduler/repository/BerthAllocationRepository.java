@@ -18,6 +18,8 @@ public interface BerthAllocationRepository extends JpaRepository<BerthAllocation
 
     Optional<BerthAllocation> findByVisitAndStatusIn(VesselVisit visit, Collection<AllocationStatus> statuses);
 
+    List<BerthAllocation> findByStatusIn(Collection<AllocationStatus> statuses);
+
     /** Allocations in the given statuses with berth, visit and vessel loaded in one query. */
     @Query("""
             select a from BerthAllocation a
