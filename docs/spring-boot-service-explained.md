@@ -434,6 +434,45 @@ public Assignment allocate(VesselVisit visit) {
 Key ideas:
 - **`@Transactional`** — everything in the method commits together or not at all.
   A half-scheduled ship (a visit with no prediction, say) cannot exist.
+- **A queued ship gets a time, not just a number.** Every allocation ends one
+  typical stay after it starts (`PlanningRules.typicalStay`, a published median
+  per vessel type). A queued ship's *requested* arrival is the later of its own
+  ETA and the time its berth is expected to come free, and the response adds an
+  advised speed: distance over time available, never below an economical speed
+  for the type. This is the just-in-time arrival idea: slow down instead of
+  waiting at anchor. The speed is advice only.
+- **A released berth goes to the head of the queue**, in the same transaction.
+- **The vessel operator has its own controller**, `VesselOperatorController`
+  under `/api/operator`. `POST /eta` asks the ETA model for an estimate and
+  stores nothing. `POST /vessels/{id}/accept` turns the requested arrival into
+  the *planned* one (`pta_berth`, a `PLANNED` event from source `VESSEL`).
+  `POST /vessels/{id}/reject` states when the vessel can arrive instead and is
+  answered with a new requested arrival. `POST /vessels/{id}/omit` cancels the
+  call and hands its berth on. A new request from the terminal clears an
+  earlier acceptance, and accepting a time that has been replaced returns
+  `409`. This follows the weekly berth planning process in DCSA's Industry
+  Blueprint. All are `POST` because each is a decision or a question from
+  outside, not an edit of a stored resource.
+- **The timestamp ledger is published in the DCSA Port Call 2.0 format** at
+  `GET /api/port-call/v2/events` (package `dcsa`). Field names, nesting, codes,
+  the `API-Version` and `Next-Page-Cursor` headers and the error body
+  (`feedbackElements`) follow the standard's OpenAPI file. `Milestone` and
+  `TimeClassifier` carry the standard's codes. Supported filters:
+  `UNLocationCode`, `vesselIMONumber`, `vesselMMSINumber`, `vesselName`,
+  `portCallServiceTypeCode`, `classifierCode`, `eventTimestampMin`,
+  `eventTimestampMax`, `limit`, `cursor`; any other is refused with a 400. The
+  ETA model's estimates are not published, because in the standard an estimated
+  arrival at berth is the carrier's to send.
+- **The same endpoint receives events**: `POST /api/port-call/v2/events` takes a
+  list of DCSA events from a vessel operator (`PortCallEventReceiver`). For the
+  berth service an `EST` arrival opens or refreshes the visit and is answered
+  with a requested arrival, a `PLN` arrival accepts it, an `ACT` arrival or
+  departure puts the vessel on or off its berth, and an omitted call is
+  cancelled. Each event is applied in its own transaction; the answer is `200`
+  with one `feedbackElements` entry per event that could not be applied,
+  pointing at it by position (`$.events[2]`). Other services (pilotage,
+  towage) are reported as not processed. Vessels are matched by IMO number,
+  then MMSI, then name, and created if unknown.
 - **Allocation is still first-fit**: take the first free berth in `seq` order. If
   none is free, the ship is queued. It does not yet check that the ship fits the
   berth or matches the terminal type; the data for that is now in place.
@@ -583,8 +622,8 @@ The full behaviour we verified:
 | Schedule V002–V004 | `/schedule` ×3 | `BERTHED` at B2, B3, B4 |
 | Schedule V005 | `/schedule` | `QUEUED`, **queueNumber 1** (port full) |
 | Check berths | `GET /berths` | all 4 occupied, correct vesselIds |
-| Release B2 | `PUT /berths/B2/release` | `released: true` |
-| Schedule V006 | `/schedule` | `BERTHED` at **B2** (reused the freed spot) |
+| Release B2 | `PUT /berths/B2/release` | `released: true`; B2 goes to V005, the head of the queue |
+| Schedule V006 | `/schedule` | `QUEUED`, **queueNumber 1** |
 | Restart the service, check berths | `GET /berths` | same occupancy as before the restart |
 
 That ETA of **414 min matches what FastAPI returned directly** — proof the chain
@@ -648,8 +687,11 @@ any tool is allowed to change state.
 
 Closest first:
 
-- **Promote the queue on release** — when a berth frees, give it to the vessel
-  at the head of the queue instead of the next one to ask.
+- **Reorder the queue when a ship is materially late** — today the queue is
+  fixed by registration order, so a berth can stand empty for a ship delayed
+  by weather while a nearer one waits. A ship should keep its place only
+  while its ETA is within a tolerance of its requested arrival; ships that
+  slowed down on our advice must not be penalised.
 - **Fit and type checks in allocation** — vessel LOA / beam / draft against the
   berth's limits, vessel type against terminal type.
 - **Arrival and berthing endpoints** — move a visit through `ARRIVED` and

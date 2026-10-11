@@ -160,7 +160,8 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-22 tests in three classes: migrations and schema, the scheduling flow, and the
+54 tests in eight classes: migrations and schema, the scheduling flow, the
+planning rules, and the
 JSON contract of `/api/ships`. The first two need MySQL running (Phase 0.3) and
 use their own schema, `port_core_test`, which is wiped and rebuilt on every run.
 They do not need FastAPI, and they never touch `port_core`.
@@ -258,7 +259,9 @@ for n in 2 3 4 5; do
 done
 ```
 **Expect:** V002–V004 `BERTHED` (B2, B3, B4); **V005 `QUEUED` with queueNumber 1**
-(port full, only 4 berths).
+(port full, only 4 berths). The queued response also carries `requestedArrival`,
+the time a berth is expected to come free, and `advisedSpeedKnots` when slowing
+down would avoid waiting.
 
 ### 5.3 Check occupancy, then release & reassign
 ```bash
@@ -267,7 +270,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/ships/berths/B2/release    # -> {"relea
 curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
   -H "Content-Type: application/json" \
   -d '{"vesselId":"V006","lat":60.1,"lon":4.9,"sog":12.5,"cog":210.0,"destLat":60.39,"destLon":5.32}'
-# -> V006 BERTHED at B2 (reused the freed spot)
+# -> V006 QUEUED, queueNumber 1 (B2 went to V005, which was waiting first)
 ```
 
 **Full verified behaviour table:**
@@ -278,8 +281,8 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
 | 2 | Schedule V002–V004 | `BERTHED` at B2, B3, B4 |
 | 3 | Schedule V005 | `QUEUED`, queueNumber 1 |
 | 4 | `GET /berths` | all 4 occupied, correct vesselIds |
-| 5 | Release B2 (`PUT`) | `released: true` |
-| 6 | Schedule V006 | `BERTHED` at B2 (reassigned) |
+| 5 | Release B2 (`PUT`) | `released: true`; `GET /berths` now shows V005 at B2 |
+| 6 | Schedule V006 | `QUEUED`, queueNumber 1 |
 | 7 | Restart Spring Boot, `GET /berths` | same four occupants as before the restart |
 
 If all seven match, **the full system is working end-to-end.**
@@ -289,8 +292,22 @@ Two behaviours to know about:
 - Scheduling a vessel that is already scheduled (V001 again) does **not** take a
   second berth. It refreshes that vessel's ETA and returns its current berth or
   queue number.
-- Releasing a berth does not yet hand it to the queued vessel. V005 stays at
-  queue number 1 until it asks again, at which point it gets a free berth.
+- The vessel operator has its own endpoints under `/api/operator`:
+  `POST /eta` asks the ETA model for an estimate and stores nothing;
+  `POST /vessels/{vesselId}/accept` accepts the requested arrival (a stale
+  time gets `409`); `POST /vessels/{vesselId}/reject` with
+  `{"estimatedArrival":"..."}` declines it and is answered with a new
+  requested arrival; `POST /vessels/{vesselId}/omit` skips the call.
+- An operator's system can send the same decisions as DCSA Port Call events
+  to `POST /api/port-call/v2/events`.
+- The same timestamps are published in the DCSA Port Call 2.0 format at
+  `GET /api/port-call/v2/events`, for example
+  `curl -s "http://127.0.0.1:8080/api/port-call/v2/events?classifierCode=REQ"`.
+- Releasing a berth hands it straight to the vessel that has waited longest.
+  A newcomer cannot take it ahead of the queue.
+- A berth is planned free one typical stay after its vessel's ETA. The stay
+  depends on the optional `vesselType` in the request (for example
+  `"vesselType":"CONTAINER"`); without it the all-ships figure is used.
 
 ---
 
