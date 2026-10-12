@@ -692,6 +692,10 @@ Closest first:
   by weather while a nearer one waits. A ship should keep its place only
   while its ETA is within a tolerance of its requested arrival; ships that
   slowed down on our advice must not be penalised.
+- **Run the ETA model inside this service** — load the model in Java (ONNX
+  Runtime, or XGBoost4J if conversion fails) so no separate Python service is
+  needed to predict. The feature maths moves too, guarded by a parity test
+  against Python's output.
 - **Fit and type checks in allocation** — vessel LOA / beam / draft against the
   berth's limits, vessel type against terminal type.
 - **Arrival and berthing endpoints** — move a visit through `ARRIVED` and

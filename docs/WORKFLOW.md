@@ -41,6 +41,9 @@ You only do this once per machine.
 ### 0.1 Python environment
 
 ```powershell
+# First time on this machine: create the venv beside the project (needs Python 3.14)
+python -m venv ..\port_ml_env
+
 # Activate the venv (PowerShell)
 ..\port_ml_env\Scripts\Activate.ps1
 
