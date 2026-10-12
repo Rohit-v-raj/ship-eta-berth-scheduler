@@ -1,10 +1,12 @@
 # AI-Powered Ship ETA Predictor & Berth Scheduler
 
-Predicts when ships will arrive at port from raw **AIS** (Automatic
-Identification System) tracking data, then plans their berths: a free berth or
-a place in the queue, a requested arrival time, and a speed that avoids waiting
-at anchor. An end-to-end system spanning a Python data/model pipeline and a
-Java Spring Boot backend, built as the marine side of a terminal operating
+**The aim is to cut shipping emissions.** A ship that hurries to port and then
+waits at anchor for a berth has burned fuel for nothing. This project predicts
+when ships will arrive from raw **AIS** (Automatic Identification System)
+tracking data, then plans their berths: a free berth or a place in the queue, a
+requested arrival time, and a slower speed that brings the ship in when its
+berth is ready. An end-to-end system spanning a Python data/model pipeline and
+a Java Spring Boot backend, built as the marine side of a terminal operating
 system and being brought in line with the **DCSA Port Call** standard.
 
 ```
@@ -16,6 +18,43 @@ system and being brought in line with the **DCSA Port Call** standard.
                                        ▼
                                MySQL (9 tables)
 ```
+
+## Why: decarbonisation
+
+Shipping produces close to 3% of the world's greenhouse gas emissions, and the
+IMO's 2023 strategy aims for net zero from international shipping by around
+2050. One measure needs no new fuel and no new ship: stop vessels racing to a
+port that is not ready for them.
+
+Fuel burn rises steeply with speed. A ship told early that its berth will be
+free at 14:00 can slow down and arrive at 14:00, instead of arriving at 11:00
+and waiting three hours at anchor. The distance is the same; the fuel burned,
+and the CO2 emitted, is less. This is **just-in-time arrival**.
+
+An IMO study of container ship voyages in 2019 (*Just In Time Arrival:
+Emissions reduction potential in global container shipping*, 2022, carried out
+by MarineTraffic for the GreenVoyage2050 Low Carbon Global Industry Alliance)
+estimated what it could save:
+
+| Speed optimised over | Mean fuel saving per voyage |
+|---|---|
+| the whole voyage | 14.16% |
+| the last 24 hours | 5.90% |
+| the last 12 hours | 4.23% |
+
+Just-in-time arrival needs two things, and they are the two halves of this
+project:
+
+1. **An arrival time the terminal can trust**, so it knows when each ship will
+   really arrive. This is the ETA model.
+2. **A berth plan that answers with a time and a speed**, so the ship knows
+   when it is wanted and how fast to sail. This is the scheduler.
+
+**What this project does not claim.** It gives the advice; it does not yet
+calculate the fuel or CO2 a ship saves by following it. The figures above are
+the study's, not measurements of this system. Its voyages are also short (a
+median of about four hours of approach), so the room to slow down is smaller
+than in the study's shortest case.
 
 ## Results
 
@@ -41,7 +80,8 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
   free.
 - **Speed advice.** A queued ship is told the speed that brings it in at the
   requested time instead of early, never below an economical speed for its
-  type. This is the just-in-time arrival idea: slow down rather than wait.
+  type. This is the just-in-time arrival idea: slow down rather than wait, and
+  burn less fuel doing it.
 - **The operator answers.** Accept the requested time, reject it with the time
   the ship can make, or omit the call.
 - **The queue moves by itself.** A released berth goes to the ship that has
@@ -128,6 +168,9 @@ conformance tests.
   sets the status to "moored", which is well after the ship has stopped: in the
   last 30 minutes before it, 71% of position reports are under 5 knots. The
   model therefore predicts late when a ship is close to port.
+- **No emissions figure.** The scheduler advises a speed but does not estimate
+  the fuel or CO2 saved. That needs a fuel curve for each ship, which the data
+  does not have.
 - **The queue never reorders.** A berth can stand empty for a ship delayed by
   weather while a nearer one waits.
 - **Stay and speed figures are published medians**, not measurements of this
