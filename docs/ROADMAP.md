@@ -2,7 +2,9 @@
 
 > **Status note (October 2026):** this is the original plan, and parts of it are
 > history. It mentions Maven, Java 17 and Keras, none of which were used in the
-> end. For how to run the system today see `WORKFLOW.md`; for what was actually
+> end. The `POST /api/ships/schedule` endpoint sketched below no longer exists:
+> a call now opens with a DCSA Port Call event (see `END-TO-END-GUIDE.md`). For
+> how to run the system today see `WORKFLOW.md`; for what was actually
 > built, see the README and the per-component explainers in this folder.
 
 ## What This Project Does

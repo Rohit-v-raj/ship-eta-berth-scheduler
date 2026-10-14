@@ -7,7 +7,9 @@ tracking data, then plans their berths: a free berth or a place in the queue, a
 requested arrival time, and a slower speed that brings the ship in when its
 berth is ready. An end-to-end system spanning a Python data/model pipeline and
 a Java Spring Boot backend, built as the marine side of a terminal operating
-system and being brought in line with the **DCSA Port Call** standard.
+system and being brought in line with the **DCSA Port Call** standard. A React
+console puts it on screen: the berth plan against time, the ships on a map, and
+the exchange between terminal and ship.
 
 ```
   Vessel operator ──┐    ┌───────────────────────────┐      ┌──────────────────────┐
@@ -16,7 +18,7 @@ system and being brought in line with the **DCSA Port Call** standard.
    (DCSA events)         │  requested arrival, speed  │ ◀─── │  XGBoost ETA model   │
                          └─────────────┬─────────────┘ ETA  └──────────────────────┘
                                        ▼
-                               MySQL (9 tables)
+                               MySQL (10 tables)
 ```
 
 ## Why: decarbonisation
@@ -73,22 +75,62 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
 
 ## What the scheduler does
 
-- **Berth or queue.** A ship reports its position; the model predicts its ETA
-  and the ship gets the first free berth, or a place in a virtual queue.
-- **A time, not just a number.** Every ship is given a *requested arrival*: its
-  own ETA if a berth is free, otherwise the time a berth is expected to come
-  free.
-- **Speed advice.** A queued ship is told the speed that brings it in at the
-  requested time instead of early, never below an economical speed for its
-  type. This is the just-in-time arrival idea: slow down rather than wait, and
-  burn less fuel doing it.
-- **The operator answers.** Accept the requested time, reject it with the time
-  the ship can make, or omit the call.
-- **The queue moves by itself.** A released berth goes to the ship that has
-  waited longest.
+- **A call opens with an estimate.** A ship's operator sends an estimated
+  arrival; the terminal gives the ship the first free berth, or a place in a
+  virtual queue.
+- **A time, not just a number.** The terminal answers every estimate with a
+  *requested arrival*: the ship's own estimate if a berth is free, otherwise
+  the time a berth is expected to come free.
+- **The operator answers.** Accept the requested time, propose the time the
+  ship can make, or omit the call.
+- **A berth is held from the terminal's answer**, not from the ship's
+  acceptance, so a slow reply never loses it to another ship. A reply that is
+  an hour late is flagged on the planner's screen, and the planner may cancel
+  the call. Nothing is cancelled automatically.
+- **One route for all of it.** Estimates, acceptances, arrivals, departures
+  and omitted calls are DCSA Port Call events. There is no second way in.
+- **The queue moves by itself.** A freed berth goes to the ship that has
+  waited longest, and the terminal issues it a new request. Whenever the berth
+  plan changes (a ship berths early or late, a call is dropped, an estimate
+  moves), every ship still waiting is given a new time if its own has moved.
+- **A late ship gives its berth up.** If a ship holding a berth sends an
+  estimate more than 4 hours after the time it agreed, and a waiting ship can
+  be alongside sooner, the berth goes to that ship. The late one keeps its
+  place in line.
+- **Berths fit the ships, and maintenance is planned around.** A ship is given
+  only a berth its length, beam and draft fit, and is turned away if it fits
+  none. Berth maintenance is recorded in advance; no ship is given a berth for
+  a stay that would run into it.
+- **Speed is the ship's sum.** The terminal sends a time, as the standard
+  says, and never a speed. The operator's calculator runs the ETA model and
+  works out the speed that meets the requested time, never below an economical
+  speed for the ship's type. This is the just-in-time arrival idea: slow down
+  rather than wait, and burn less fuel doing it.
 - **Nothing is lost on restart.** State lives in MySQL: visits, berth
-  allocations, every ETA the model produced, and a ledger of every timestamp
-  and who reported it.
+  allocations, each position a ship gave, and a ledger of every timestamp and
+  who reported it.
+
+## The console
+
+`port-console/` is a React app for the two people in the exchange, with a seat
+for each (there is no login yet; roles are built in so one can be added).
+
+- **Terminal planner:** berths in use and ships waiting, the berth plan against
+  time, each ship on a map at the position it last gave, and every visit in a
+  table. A visit opens to show its four times, who gave each, and the ledger.
+  A late answer is flagged; a call whose ship has not arrived can be cancelled.
+  Berth maintenance is scheduled and shown on the plan.
+- **Vessel operator:** a calculator (click the map for the position) for the
+  model's ETA and the speed that meets the terminal's time; then send the
+  estimate, accept the request, propose another time or omit.
+- **Port call events:** the DCSA feed, filterable, with the raw message per row.
+- **Wire inspector:** every request a click sent and the scheduler's answer.
+- **Stories:** the whole berth conversation played one step at a time against
+  the real scheduler, each step explained from the answer it got.
+
+It shows what the system says and adds no claims of its own: the speed is
+marked as the operator's own calculation, and the model's ETA sits beside plain
+distance over speed. See `docs/frontend-explained.md`.
 
 ## Working towards the DCSA Port Call standard
 
@@ -110,6 +152,9 @@ conformance tests.
   format (`feedbackElements`).
 - **The berth planning conversation** from DCSA's Industry Blueprint: estimate,
   request, then accept, replan or omit.
+- **Who ended a call.** A call omitted by the carrier and a berth service
+  cancelled by the terminal are published with the standard's two different
+  flags, `isOmitted` and `isCanceled`.
 
 **Not there yet**
 
@@ -120,21 +165,26 @@ conformance tests.
 - Terminal codes are invented, so no facility code is sent.
 - No login and no subscriber registration (the standard leaves both to the
   implementer).
-- The ETA model's own estimates are kept out of the feed, because in the
-  standard an estimated arrival at berth is the carrier's to send.
+- The terminal publishes its requests for others to read; it does not push
+  them to a carrier's own endpoint.
 
 ## API at a glance
 
-| Endpoint | For |
-|---|---|
-| `POST /api/ships/schedule` | position in; model ETA, berth or queue, requested arrival, advised speed |
-| `GET /api/ships/berths` | berth occupancy |
-| `PUT /api/ships/berths/{id}/release` | free a berth; it passes to the head of the queue |
-| `POST /api/operator/eta` | ask the model for an ETA without scheduling |
-| `POST /api/operator/vessels/{id}/accept` · `/reject` · `/omit` | the operator's answer to a requested arrival |
-| `GET /api/port-call/v2/events` | the timestamp ledger as DCSA Port Call 2.0 events |
-| `POST /api/port-call/v2/events` | receive DCSA berth events from a carrier's system |
-| `/api/agent/*` | a Gemini assistant; its tools still return sample data |
+Four controllers, one per flow.
+
+| Controller | Endpoint | For |
+|---|---|---|
+| DCSA events | `POST /api/port-call/v2/events` | the berth conversation: estimate (`EST`, opens a call), accept (`PLN`), arrival and departure (`ACT`), omit. The only way a call begins, changes or ends |
+| | `GET /api/port-call/v2/events` | the timestamp ledger as DCSA Port Call 2.0 events, with filters and paging |
+| Operator's calculator | `POST /api/operator/eta` | the model's ETA for a position, and the speed that meets the terminal's requested time. Stores nothing |
+| Console | `GET /api/port` · `/api/port/berth-plan` | the port and its berths; berth windows over a period |
+| | `GET /api/visits` · `/api/visits/{ref}` | visits in progress; one visit with its ledger |
+| | `PUT /api/port/berths/{code}/release` | the planner frees a berth when a ship's side has not reported leaving |
+| | `PUT /api/visits/{ref}/cancel` | the planner cancels the call of a ship that has not arrived, for example one that never answered |
+| | `GET /api/port/maintenance` · `POST`, `DELETE /api/port/berths/{code}/maintenance` | berth maintenance: the windows planned, schedule one, remove one |
+| Assistant | `/api/agent/*` | a Gemini assistant; its tools still return sample data |
+
+`docs/END-TO-END-GUIDE.md` exercises every one of them, request by request.
 
 ## What makes this project different
 
@@ -168,11 +218,24 @@ conformance tests.
   sets the status to "moored", which is well after the ship has stopped: in the
   last 30 minutes before it, 71% of position reports are under 5 knots. The
   model therefore predicts late when a ship is close to port.
-- **No emissions figure.** The scheduler advises a speed but does not estimate
+- **No emissions figure.** The calculator advises a speed but does not estimate
   the fuel or CO2 saved. That needs a fuel curve for each ship, which the data
   does not have.
+- **The advised speed uses straight-line distance.** The route a ship sails
+  around a coast is longer, so the figure is on the low side: a starting
+  point, not a passage plan.
+- **The terminal keeps no model predictions.** The calculator stores nothing,
+  and the terminal knows a ship's position only when an estimate carries one.
+  Checking the model against real arrivals needs a position feed of its own.
 - **The queue never reorders.** A berth can stand empty for a ship delayed by
   weather while a nearer one waits.
+- **Waiting times follow events, not the clock.** A waiting ship's requested
+  time is worked out again whenever something happens to the berth plan. A
+  berthed ship that simply overstays changes nothing until the next event.
+- **A stay is a median.** A berth's planned end is arrival plus a published
+  median stay for the vessel type, so about half of all ships will overstay
+  it. Nothing yet gives the terminal a better departure time during the stay.
+- **Vessel type is not matched to terminal type.** Size is checked; type is not.
 - **Stay and speed figures are published medians**, not measurements of this
   port: time in port from UNCTAD (2018), economical speeds from industry
   sources. Stay depends on vessel type only, not on cargo volume.
@@ -187,8 +250,9 @@ src/                  Python pipeline
   train.py              XGBoost ETA baseline (production model)
   train_bigru.py        Bi-GRU head-to-head experiment
   predict_api.py        FastAPI service: /health, /predict
+port-console/         React console (Vite, JavaScript): planner, operator, events, stories
 port-scheduler-api/   Spring Boot 3 / Java 21 / Gradle
-  controller/           ships, vessel-operator and assistant endpoints
+  controller/           four controllers: DCSA events, operator's calculator, console, assistant
   dcsa/                 DCSA Port Call 2.0: message shapes, publishing, receiving
   service/              visit lifecycle, berth allocation, planning rules
   entity/, repository/  the data model and its queries (MySQL, Flyway migrations)
@@ -226,20 +290,22 @@ python -m uvicorn predict_api:app --app-dir src --port 8000
 #    secrets.properties file — see docs/WORKFLOW.md, Phase 0.3
 cd port-scheduler-api; .\gradlew bootRun
 
-# 4. Schedule a ship: model ETA, then a berth or a queue place
-curl -X POST http://localhost:8080/api/ships/schedule -H "Content-Type: application/json" `
-  -d '{"vesselId":"V001","lat":62.47,"lon":6.15,"sog":12.0,"cog":45.0,"destLat":62.47,"destLon":6.24}'
-# → {"vesselId":"V001","etaMinutes":98.5,"status":"BERTHED","berthId":"B1",...,"requestedArrival":"..."}
+# 4. Ask the calculator when a ship would arrive (stores nothing)
+curl -X POST http://localhost:8080/api/operator/eta -H "Content-Type: application/json" `
+  -d '{"vesselId":"V001","lat":61.62,"lon":4.40,"sog":13.0,"cog":92.0,"destLat":61.612,"destLon":5.07}'
+# → {"vesselId":"V001","etaMinutes":226.9,"estimatedArrival":"...","distanceNm":19.13,...}
 
-# 5. The operator accepts the requested arrival
-curl -X POST http://localhost:8080/api/operator/vessels/V001/accept
-
-# 6. Read the exchange as DCSA Port Call events
-curl "http://localhost:8080/api/port-call/v2/events?classifierCode=REQ"
+# 5. Open the console (separate terminal; needs Node.js) and play a story
+cd port-console; npm install; npm run dev      # then http://localhost:5173
 ```
 
-Java tests (54, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`.
+A call is opened, answered and closed with DCSA Port Call events. The console
+sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
+`curl` command, with the answer to expect and how each step lines up with the
+standard.
+
+Java tests (101, against a throwaway MySQL schema): `.\gradlew test` from
+`port-scheduler-api/`. Console tests (69): `npm test` from `port-console/`.
 
 ## Data
 
@@ -254,9 +320,11 @@ no manual labelling.
 
 | Doc | What it covers |
 |---|---|
+| `docs/END-TO-END-GUIDE.md` | from an empty machine to the whole berth conversation: every controller and endpoint, the request to send, the answer to expect, and how it lines up with DCSA Port Call 2.0 |
 | `docs/WORKFLOW.md` | end-to-end runbook: setup → data → train → serve → test |
 | `docs/fastapi-service-explained.md` | the Python model service, line by line |
 | `docs/spring-boot-service-explained.md` | the Java scheduler: data model, berth planning, operator and DCSA endpoints, and the HTTP/2 bug story |
+| `docs/frontend-explained.md` | the console: screens, design rules, how it is built, and how login and roles will fit in |
 | `docs/system-map.html` | diagrams of the whole system: every API, the berth conversation step by step, the database, which function writes which table, and current progress |
-| `docs/request-flow-diagram.html` | visual trace of a `/schedule` request across both services |
+| `docs/request-flow-diagram.html` | visual trace of one calculator request across both services |
 | `docs/xgboost-explained.md`, `docs/bigru-explained.md` | how the models work |
