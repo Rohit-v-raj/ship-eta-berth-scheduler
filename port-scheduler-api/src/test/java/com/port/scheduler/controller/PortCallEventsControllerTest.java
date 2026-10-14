@@ -1,5 +1,7 @@
-package com.port.scheduler.dcsa;
+package com.port.scheduler.controller;
 
+import com.port.scheduler.dcsa.PortCallEventPublisher;
+import com.port.scheduler.dcsa.PortCallEventReceiver;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Page;
 import com.port.scheduler.dcsa.PortCallMessages.Event;
 import com.port.scheduler.dcsa.PortCallMessages.FeedbackElement;
@@ -39,7 +41,7 @@ class PortCallEventsControllerTest {
         Event event = new Event(UUID.fromString("3910eb91-8791-4699-8029-8bba8cedb6f5"), null,
                 Instant.parse("2026-10-12T10:00:00Z"),
                 new PortCall(null, "VV-1", "NOFRO", null), null,
-                new PortCallService(null, "BERTH", "ARRI", "INBD", "BRTH", null), null,
+                new PortCallService(null, "BERTH", "ARRI", "INBD", "BRTH", null, null), null,
                 new Timestamp("REQ", Instant.parse("2026-10-12T14:00:00Z"), null));
         given(publisher.find(any())).willReturn(new Page(List.of(event), "42"));
 

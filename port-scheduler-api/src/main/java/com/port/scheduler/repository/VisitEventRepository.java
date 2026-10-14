@@ -3,6 +3,7 @@ package com.port.scheduler.repository;
 import com.port.scheduler.entity.visit.EventSource;
 import com.port.scheduler.entity.visit.Milestone;
 import com.port.scheduler.entity.visit.TimeClassifier;
+import com.port.scheduler.entity.visit.VesselVisit;
 import com.port.scheduler.entity.visit.VisitEvent;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -45,4 +46,28 @@ public interface VisitEventRepository extends JpaRepository<VisitEvent, Long> {
                                        @Param("min") Instant min,
                                        @Param("max") Instant max,
                                        Pageable page);
+
+    /**
+     * When the latest event of this kind was recorded for each of the visits:
+     * one row per visit that has any, holding the visit's id and the time.
+     */
+    @Query("""
+            select e.visit.id, max(e.recordedAt) from VisitEvent e
+            where e.visit in :visits
+              and e.milestone = :milestone
+              and e.classifier = :classifier
+            group by e.visit.id
+            """)
+    List<Object[]> findLatestRecordedAt(@Param("visits") Collection<VesselVisit> visits,
+                                        @Param("milestone") Milestone milestone,
+                                        @Param("classifier") TimeClassifier classifier);
+
+    /** A visit's whole ledger, oldest first, including the ETA model's estimates. */
+    @Query("""
+            select e from VisitEvent e
+            left join fetch e.berth
+            where e.visit = :visit
+            order by e.id
+            """)
+    List<VisitEvent> findLedger(@Param("visit") VesselVisit visit);
 }

@@ -90,6 +90,16 @@ public class VesselVisit extends BaseEntity {
     @Column(length = 500)
     private String remarks;
 
+    /**
+     * Who ended a call that did not take place: {@code VESSEL} when its
+     * operator omitted it, {@code TERMINAL} when the terminal cancelled it.
+     * Null for every other visit.
+     */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(length = 20)
+    private EventSource cancelledBy;
+
     public VesselVisit(String visitRef, Vessel vessel, VisitPhase phase) {
         this.visitRef = visitRef;
         this.vessel = vessel;

@@ -101,7 +101,11 @@ public class PortCallEventPublisher {
     private static Event toEvent(VisitEvent e, String locode) {
         VesselVisit visit = e.getVisit();
         Milestone milestone = e.getMilestone();
-        Boolean omitted = visit.getPhase() == VisitPhase.CANCELLED ? Boolean.TRUE : null;
+        // The standard tells a call omitted by the carrier from a service cancelled by its provider.
+        boolean cancelled = visit.getPhase() == VisitPhase.CANCELLED;
+        boolean byTerminal = visit.getCancelledBy() == EventSource.TERMINAL;
+        Boolean omitted = cancelled && !byTerminal ? Boolean.TRUE : null;
+        Boolean canceled = cancelled && byTerminal ? Boolean.TRUE : null;
         Berth berth = e.getBerth();
         Location location = berth == null ? null : new Location(berth.getName(), locode,
                 new GeoCoordinate(String.valueOf(berth.getLatitude()), String.valueOf(berth.getLongitude())));
@@ -114,7 +118,7 @@ public class PortCallEventPublisher {
                         voyage(visit.getOutboundVoyageNo()), voyage(visit.getInboundVoyageNo()), omitted),
                 new PortCallService(id("service", visit.getId() + ":" + milestone.name()),
                         milestone.getServiceTypeCode(), milestone.getEventTypeCode(),
-                        milestone.getPhaseTypeCode(), milestone.getFacilityTypeCode(), location),
+                        milestone.getPhaseTypeCode(), milestone.getFacilityTypeCode(), location, canceled),
                 toVessel(visit),
                 new Timestamp(e.getClassifier().getCode(), e.getEventTime(), e.getRemarks()));
     }
@@ -128,7 +132,7 @@ public class PortCallEventPublisher {
         // A vessel scheduled before its particulars are on record is known only by the terminal's own code.
         String name = v.getName() != null ? v.getName() : v.getCode();
         return new Vessel(v.getImoNumber(), v.getMmsi(), name.length() > 50 ? name.substring(0, 50) : name,
-                v.getCallSign(), typeCode(v.getType()),
+                v.getCallSign(), typeCode(v.getType()), null, null,
                 length != null || width != null ? "MTR" : null, length, width,
                 airDraft != null || draft != null ? "MTR" : null, airDraft, draft);
     }
