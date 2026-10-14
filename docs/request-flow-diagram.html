@@ -293,8 +293,8 @@
   <header class="masthead">
     <div>
       <div class="eyebrow">Request trace &middot; ETA &amp; Berth Scheduler</div>
-      <h1>The journey of one <span class="mono">POST&nbsp;/schedule</span></h1>
-      <p>How a single ship-scheduling request travels across two services &mdash; a Java orchestration layer and a Python model &mdash; and comes back with an ETA and a berth.</p>
+      <h1>The journey of one <span class="mono">POST&nbsp;/api/operator/eta</span></h1>
+      <p>How a single request to the operator&rsquo;s calculator travels across two services &mdash; a Java orchestration layer and a Python model &mdash; and comes back with an ETA, and with the speed that meets the terminal&rsquo;s time if it has asked for one.</p>
     </div>
     <svg class="compass" width="92" height="92" viewBox="0 0 92 92" fill="none" aria-hidden="true">
       <circle cx="46" cy="46" r="43" stroke="currentColor" stroke-width="1.5" opacity="0.35"/>
@@ -315,14 +315,14 @@
       <div class="chips"><span class="chip">HTTP</span><span class="chip">camelCase JSON</span></div>
     </div>
     <div class="hop">
-      <span class="label">POST /schedule</span>
+      <span class="label">POST /api/operator/eta</span>
       <span class="arrow"></span>
       <span class="back">&larr; 200 response</span>
     </div>
     <div class="lane s-spring">
       <span class="role">Orchestration &amp; business logic</span>
       <span class="name">Spring Boot</span>
-      <span class="desc">Validates, calls the model, then assigns a berth or queue number.</span>
+      <span class="desc">Validates, calls the model, then adds the speed for the ship&rsquo;s open call.</span>
       <div class="chips"><span class="chip">Java&nbsp;21</span><span class="chip">:8080</span><span class="chip">RestClient</span></div>
     </div>
     <div class="hop">
@@ -349,7 +349,7 @@
       <div class="card">
         <h3>Client sends the request <span class="runs">Client &rarr; Spring</span></h3>
         <p>A vessel's current AIS state plus its destination berth, as camelCase JSON.</p>
-        <div class="payload"><span class="cmt">POST http://localhost:8080/api/ships/schedule</span>
+        <div class="payload"><span class="cmt">POST http://localhost:8080/api/operator/eta</span>
 { <span class="k">"vesselId"</span>: "V001",
   <span class="k">"lat"</span>: 62.7375, <span class="k">"lon"</span>: 7.2000,
   <span class="k">"sog"</span>: 13.0, <span class="k">"cog"</span>: 220.0,
@@ -361,7 +361,7 @@
       <div class="num">2</div>
       <div class="card">
         <h3>Route, deserialize &amp; validate <span class="runs">Spring</span></h3>
-        <p><code>PortController.schedule()</code> receives the body. Jackson maps it to a <code>ScheduleRequest</code> record; <code>@Valid</code> checks <code>@NotBlank vesselId</code>, <code>@PositiveOrZero sog</code>, <code>@Min(0)@Max(360) cog</code>. A failure returns <code>400</code> here &mdash; nothing downstream runs.</p>
+        <p><code>VesselOperatorController.eta()</code> receives the body. Jackson maps it to an <code>EtaQuery</code> record; <code>@Valid</code> checks <code>@NotBlank vesselId</code>, <code>@PositiveOrZero sog</code>, <code>@Min(0)@Max(360) cog</code>. A failure returns <code>400</code> here &mdash; nothing downstream runs.</p>
       </div>
     </div>
 
@@ -369,7 +369,7 @@
       <div class="num">3</div>
       <div class="card">
         <h3>Delegate to the ETA service <span class="runs">Spring</span></h3>
-        <p>The controller calls <code>etaService.predict(req)</code> first &mdash; the berth can't be assigned until the ETA is known.</p>
+        <p>The controller calls <code>etaService.predict(query)</code> first &mdash; a speed cannot be worked out until the ETA is known.</p>
       </div>
     </div>
 
@@ -433,10 +433,10 @@ lat  lon  naive_eta_min</div>
   <div class="xlate">
     <span class="tag">&#8646;</span>
     <span class="body"><b>snake_case &rarr; camelCase</b>
-      <span class="m">Data-shape translation #2: <code class="inline-code">EtaResponse</code> maps <code class="inline-code">eta_minutes &rarr; etaMinutes</code>. It declares only 3 fields; Jackson silently ignores the extras FastAPI sent.</span></span>
+      <span class="m">Data-shape translation #2: <code class="inline-code">EtaResponse</code> maps <code class="inline-code">eta_minutes &rarr; etaMinutes</code>. It declares four of the five fields; Jackson silently ignores the one it does not need.</span></span>
   </div>
 
-  <div class="phase return">RETURN <small>&mdash; from a prediction to a berth assignment</small></div>
+  <div class="phase return">RETURN <small>&mdash; from a prediction to the calculator&rsquo;s answer</small></div>
 
   <div class="seq">
 
@@ -451,8 +451,8 @@ lat  lon  naive_eta_min</div>
     <div class="step s-spring">
       <div class="num">10</div>
       <div class="card">
-        <h3>Business logic &mdash; assign a berth <span class="runs">Spring</span></h3>
-        <p>Now the ETA exists, <code>vesselVisitService.schedule(req, eta)</code> runs as one database transaction: it finds or opens the vessel's visit and stores the prediction, then <code>berthService.allocate(visit)</code> takes the first free berth (rows locked <code>FOR UPDATE</code>) &rarr; <b>BERTHED&nbsp;B1</b>; if all 4 are full &rarr; <b>QUEUED</b> with the visit's position in the queue.</p>
+        <h3>Business logic &mdash; the speed that meets the request <span class="runs">Spring</span></h3>
+        <p>Now the ETA exists, the controller reads the vessel's open call, if it has one (<code>PortViewService.visits</code>, read only). If the terminal has requested an arrival later than the ship would otherwise arrive, <code>PlanningRules.advisedSpeedKnots</code> gives the speed that meets it: distance over time available, never below an economical speed for the vessel type. <b>Nothing is stored.</b> A berth is assigned elsewhere, when the operator sends this estimate as a DCSA <code>EST</code> event.</p>
       </div>
     </div>
 
@@ -460,7 +460,7 @@ lat  lon  naive_eta_min</div>
       <div class="num">11</div>
       <div class="card">
         <h3>Assemble the answer <span class="runs">Spring</span></h3>
-        <p>The controller combines the ETA (from FastAPI) and the berth (local logic) into one <code>ScheduleResponse</code>.</p>
+        <p>The controller combines the ETA (from FastAPI) and the speed (local logic) into one <code>EtaEstimate</code>.</p>
       </div>
     </div>
 
@@ -470,10 +470,10 @@ lat  lon  naive_eta_min</div>
         <h3>Response to the client <span class="runs">Spring &rarr; Client</span></h3>
         <p>Serialized to JSON, <code>200 OK</code>. Round trip complete.</p>
         <div class="payload">{ <span class="k">"vesselId"</span>: "V001",
-  <span class="hl">"etaMinutes"</span>: 414.0, <span class="hl">"etaHours"</span>: 6.9,
-  <span class="k">"status"</span>: "BERTHED",
-  <span class="k">"berthId"</span>: "B1", <span class="k">"berthName"</span>: "Berth 1",
-  <span class="k">"queueNumber"</span>: null }</div>
+  <span class="hl">"etaMinutes"</span>: 414.0, <span class="hl">"estimatedArrival"</span>: "2026-10-13T19:47:22Z",
+  <span class="k">"distanceNm"</span>: 21.4, <span class="k">"naiveEtaMinutes"</span>: 98.8,
+  <span class="k">"requestedArrival"</span>: null,
+  <span class="k">"advisedSpeedKnots"</span>: null }</div>
       </div>
     </div>
 
@@ -483,7 +483,7 @@ lat  lon  naive_eta_min</div>
     <h2>One request, three representations</h2>
     <div class="rep">
       <span class="layer">Spring Boot</span>
-      <span class="job">Orchestration, validation, berth &amp; queue business logic</span>
+      <span class="job">Orchestration, validation, planning rules</span>
       <span class="shape">camelCase</span>
       <span class="divider"></span>
       <span class="layer">the wire</span>

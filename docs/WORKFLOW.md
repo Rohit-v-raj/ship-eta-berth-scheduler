@@ -21,12 +21,14 @@
  PHASE 2  Train        ─►  train.py  →  models/eta_xgb.pkl   (test MAE ~69 min)
  PHASE 3  Serve model  ─►  predict_api.py (FastAPI)  on :8000
  PHASE 4  Serve API    ─►  port-scheduler-api (Spring Boot)  on :8080
- PHASE 5  Test live    ─►  curl the full chain  →  ETA + berth + queue
+ PHASE 5  Test live    ─►  curl the full chain  →  ETA, then the berth conversation
+ PHASE 5b Console      ─►  port-console (React)  on :5173  →  the same system on screen
 ```
 
 **Runtime dependency order (when starting the live system):** FastAPI (:8000)
-**must** be up before Spring Boot can answer `/schedule`, because Spring Boot calls
-it. Always start Python first, Java second.
+**must** be up before Spring Boot can answer the operator's calculator
+(`/api/operator/eta`), because Spring Boot calls it. Always start Python first,
+Java second.
 
 All commands assume you are in the **project root** (the folder this repo was
 cloned into) unless stated otherwise.
@@ -91,7 +93,21 @@ You do **not** create any tables. Flyway builds them, and seeds a demo port with
 berths `B1`–`B4`, the first time the service starts.
 
 **Confirm it worked:** after the first `bootRun` (Phase 4), `SHOW TABLES` in
-`port_core` lists nine tables plus `flyway_schema_history`.
+`port_core` lists ten tables plus `flyway_schema_history`.
+
+### 0.4 Node.js (for the console)
+
+The console in `port-console/` needs **Node.js** (the current LTS). Install it,
+then fetch the console's packages once:
+
+```powershell
+winget install OpenJS.NodeJS.LTS      # then open a new terminal
+cd port-console
+npm install
+```
+
+**Confirm it worked:** `node --version` prints a version, and `npm test` in
+`port-console/` reports 69 tests passing (they need neither service running).
 
 ---
 
@@ -163,11 +179,20 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-54 tests in eight classes: migrations and schema, the scheduling flow, the
-planning rules, and the
-JSON contract of `/api/ships`. The first two need MySQL running (Phase 0.3) and
-use their own schema, `port_core_test`, which is wiped and rebuilt on every run.
-They do not need FastAPI, and they never touch `port_core`.
+101 tests in nine classes: migrations and schema, the scheduling flow, the
+planning rules, the console's read views, DCSA publishing and receiving, and
+the JSON contract of each controller. The ones that touch the database need
+MySQL running (Phase 0.3) and use their own schema, `port_core_test`, which is
+wiped and rebuilt on every run. They do not need FastAPI, and they never touch
+`port_core`.
+
+**Console, from `port-console/`:**
+
+```powershell
+npm test        # 69 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
+npm run lint
+```
+They run against a mock of the scheduler, so nothing else has to be running.
 
 **Python:** there are no Python tests yet; `pytest` is not in `requirements.txt`.
 
@@ -220,17 +245,18 @@ fast.
 
 **Confirm it's up:** the log ends with `Started PortSchedulerApplication`. Then:
 ```bash
-curl http://127.0.0.1:8080/api/ships/berths
-# -> [{"id":"B1",...,"occupied":false,...}, ... B4]
+curl http://127.0.0.1:8080/api/port
+# -> {"unLocode":"NOFRO","name":"Floro",...,"berths":[{"code":"B1",...}, ... B4]}
 ```
 
 > 🔑 Spring Boot's `EtaService` is configured (`application.properties`) to reach
-> FastAPI at `http://localhost:8000`. If FastAPI is **not** running, `/schedule`
-> will fail — start Phase 3 first.
+> FastAPI at `http://localhost:8000`. If FastAPI is **not** running, the
+> calculator (`/api/operator/eta`) will fail — start Phase 3 first.
 
 > 🔑 Berth occupancy and the queue are **stored**. Stopping the service does not
 > clear them, so a second run of Phase 5 starts from wherever the first one left
-> off. To start clean, release the berths (5.3) or empty the transaction tables:
+> off. To start clean, press *Reset the port* in the console, or empty the
+> transaction tables:
 > ```sql
 > DELETE FROM visit_event; DELETE FROM eta_prediction;
 > DELETE FROM berth_allocation; DELETE FROM vessel_visit; DELETE FROM vessel;
@@ -240,77 +266,111 @@ curl http://127.0.0.1:8080/api/ships/berths
 
 ## PHASE 5 — Test the live system (the full chain)
 
-With **both** services running, test the end-to-end flow.
+With **both** services running. The calls are written for **Git Bash**.
+**`END-TO-END-GUIDE.md` is the full version of this phase:** every endpoint,
+every request, the answer to expect and the DCSA rule behind it. The four calls
+below are the short proof that the chain works.
 
-### 5.1 Schedule one ship (model + berth in one call)
+### 5.1 Ask the calculator (Spring Boot → FastAPI → model)
 ```bash
-curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
+curl -s -X POST http://127.0.0.1:8080/api/operator/eta \
   -H "Content-Type: application/json" \
-  -d '{"vesselId":"V001","lat":60.1,"lon":4.9,"sog":12.5,"cog":210.0,"destLat":60.39,"destLon":5.32}'
+  -d '{"vesselId":"V001","lat":61.62,"lon":4.40,"sog":13.0,"cog":92.0,"destLat":61.612,"destLon":5.07}'
 ```
-**Expect:** `{"vesselId":"V001","etaMinutes":414.0,...,"status":"BERTHED","berthId":"B1",...}`
-The `etaMinutes` should **match** what FastAPI returned directly in Phase 3 — proof
-the chain passes data through faithfully.
+**Expect:** `{"vesselId":"V001","etaMinutes":226.9,"estimatedArrival":"...","distanceNm":19.13,"naiveEtaMinutes":88.3,"requestedArrival":null,"advisedSpeedKnots":null}`.
+The `etaMinutes` is the model's answer, passed through unchanged. Nothing is
+stored, and the last two fields are empty because V001 has no call open.
 
-### 5.2 Fill the berths and trigger the queue
+### 5.2 Open a call with a DCSA estimated arrival
 ```bash
-for n in 2 3 4 5; do
-  curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
-    -H "Content-Type: application/json" \
-    -d "{\"vesselId\":\"V00$n\",\"lat\":60.1,\"lon\":4.9,\"sog\":12.5,\"cog\":210.0,\"destLat\":60.39,\"destLon\":5.32}"
-  echo
-done
+curl -s -X POST http://127.0.0.1:8080/api/port-call/v2/events -H "Content-Type: application/json" -d '{"events":[{
+  "vessel":{"vesselName":"V001","vesselTypeCode":"GCGO"},
+  "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-12-01T12:00:00Z"}}]}'
 ```
-**Expect:** V002–V004 `BERTHED` (B2, B3, B4); **V005 `QUEUED` with queueNumber 1**
-(port full, only 4 berths). The queued response also carries `requestedArrival`,
-the time a berth is expected to come free, and `advisedSpeedKnots` when slowing
-down would avoid waiting.
+**Expect:** `{}` (every event applied). Use a time in the future.
 
-### 5.3 Check occupancy, then release & reassign
+### 5.3 See the berth and the terminal's requested arrival
 ```bash
-curl -s http://127.0.0.1:8080/api/ships/berths          # all 4 occupied
-curl -s -X PUT http://127.0.0.1:8080/api/ships/berths/B2/release    # -> {"released":true,...}
-curl -s -X POST http://127.0.0.1:8080/api/ships/schedule \
-  -H "Content-Type: application/json" \
-  -d '{"vesselId":"V006","lat":60.1,"lon":4.9,"sog":12.5,"cog":210.0,"destLat":60.39,"destLon":5.32}'
-# -> V006 QUEUED, queueNumber 1 (B2 went to V005, which was waiting first)
+curl -s "http://127.0.0.1:8080/api/visits?vessel=V001"
+curl -s "http://127.0.0.1:8080/api/port-call/v2/events?classifierCode=REQ&vesselName=V001"
+```
+**Expect:** the visit holds `B1` (`"status":"PLANNED"`), `rtaBerth` equals
+`etaBerth` because the berth was free, and `ptaBerth` is `null` until the ship
+accepts. The second call shows the same request as a DCSA `REQ` event.
+
+### 5.4 Cancel the call
+V001 never arrived, so the planner's action for it is to cancel the call.
+(`PUT /api/port/berths/B1/release` is for a ship that was alongside and left.)
+```bash
+REF=$(curl -s "http://127.0.0.1:8080/api/visits?vessel=V001" | python -c "import sys,json; print(json.load(sys.stdin)[0]['visitRef'])")
+curl -s -X PUT http://127.0.0.1:8080/api/visits/$REF/cancel         # -> {"cancelled":true,"visitRef":"VV-..."}
+curl -s http://127.0.0.1:8080/api/visits                            # -> []
 ```
 
-**Full verified behaviour table:**
+**What to know about the behaviour**
 
-| Step | Action | Expected result |
-|---|---|---|
-| 1 | Schedule V001 | `BERTHED` at B1, ETA 414 min |
-| 2 | Schedule V002–V004 | `BERTHED` at B2, B3, B4 |
-| 3 | Schedule V005 | `QUEUED`, queueNumber 1 |
-| 4 | `GET /berths` | all 4 occupied, correct vesselIds |
-| 5 | Release B2 (`PUT`) | `released: true`; `GET /berths` now shows V005 at B2 |
-| 6 | Schedule V006 | `QUEUED`, queueNumber 1 |
-| 7 | Restart Spring Boot, `GET /berths` | same four occupants as before the restart |
+- A call opens, changes and ends only through `POST /api/port-call/v2/events`:
+  an `EST` arrival opens or replans it, a `PLN` equal to the requested time
+  accepts, `ACT` arrival and departure move the ship on and off its berth, and
+  `"portCall":{"isOmitted":true}` drops it. The answer is `200` either way; a
+  refusal comes back in `feedbackElements` with severity `ERROR`.
+- The first four ships get `B1` to `B4`. The fifth is queued and is asked to
+  arrive when a berth is expected free, which is one typical stay after the
+  earliest ship's arrival.
+- A freed berth goes straight to the ship that has waited longest, with a new
+  requested arrival; a newcomer cannot take it ahead of the queue.
+- A second estimate from the same ship replans its call. It does not take a
+  second berth.
+- When the berth plan changes (a ship berths early or late, a berth is
+  released, a call is omitted or cancelled, an estimate moves), every waiting
+  ship's requested arrival is worked out again and re-issued if it moved by 15
+  minutes or more. A re-issued request clears the ship's earlier acceptance.
+- A ship is given only a berth it fits (length, beam and draft, sent in the
+  `EST` in the standard's optional size fields), and one that fits no berth is
+  refused with `ERROR` feedback. Maintenance windows (`/api/port/maintenance`,
+  `POST`/`DELETE /api/port/berths/{code}/maintenance`) are planned around.
+- A ship holding a berth that sends an estimate more than 4 hours after its
+  agreed time gives the berth up, if a waiting ship can be alongside sooner.
+- A berth is held from the terminal's answer, whether or not the ship accepts.
+  `GET /api/visits` shows `answerDueAt`, 60 minutes after the request; the
+  console flags a visit past it. Nothing is cancelled automatically: the
+  planner decides, with `PUT /api/visits/{visitRef}/cancel`.
+- The terminal never sends a speed. `POST /api/operator/eta` returns one
+  (`advisedSpeedKnots`) for a ship whose call has a requested arrival later
+  than it would otherwise arrive.
+- The console reads four `GET` endpoints that change nothing: `/api/port`,
+  `/api/port/berth-plan`, `/api/visits` (add `?vessel=` or `?state=all`) and
+  `/api/visits/{visitRef}`.
+- State is stored. Restart Spring Boot and `GET /api/visits` answers the same.
 
-If all seven match, **the full system is working end-to-end.**
+---
 
-Two behaviours to know about:
+## PHASE 5b — The console (React, port 5173)
 
-- Scheduling a vessel that is already scheduled (V001 again) does **not** take a
-  second berth. It refreshes that vessel's ETA and returns its current berth or
-  queue number.
-- The vessel operator has its own endpoints under `/api/operator`:
-  `POST /eta` asks the ETA model for an estimate and stores nothing;
-  `POST /vessels/{vesselId}/accept` accepts the requested arrival (a stale
-  time gets `409`); `POST /vessels/{vesselId}/reject` with
-  `{"estimatedArrival":"..."}` declines it and is answered with a new
-  requested arrival; `POST /vessels/{vesselId}/omit` skips the call.
-- An operator's system can send the same decisions as DCSA Port Call events
-  to `POST /api/port-call/v2/events`.
-- The same timestamps are published in the DCSA Port Call 2.0 format at
-  `GET /api/port-call/v2/events`, for example
-  `curl -s "http://127.0.0.1:8080/api/port-call/v2/events?classifierCode=REQ"`.
-- Releasing a berth hands it straight to the vessel that has waited longest.
-  A newcomer cannot take it ahead of the queue.
-- A berth is planned free one typical stay after its vessel's ETA. The stay
-  depends on the optional `vesselType` in the request (for example
-  `"vesselType":"CONTAINER"`); without it the all-ships figure is used.
+With both services running, in a **third terminal**:
+
+```powershell
+cd port-console
+npm run dev
+```
+
+Open <http://localhost:5173>. The dev server forwards `/api` to Spring Boot on
+port 8080, so nothing has to be configured.
+
+**Confirm it worked:** the Harbour page shows four berths and, below it, the
+**Stories** bar. Choose *The port fills up* and press the step button until the
+story ends. You should see four berths taken, two ships waiting with a
+requested arrival, the operator's calculator working out a speed, a berth
+released and passed to the head of the queue, and the wire inspector (header,
+*Wire*) listing every request. *Reset the port* closes whatever the story left open.
+
+Two more ways to run it:
+
+- `npm run dev:mock` shows every screen from sample data, with neither service
+  running.
+- Add `?seat=operator` or `?seat=planner` to an address to open it in that
+  seat. There is no login yet; the seat only decides which screens are offered.
 
 ---
 
@@ -325,12 +385,13 @@ When you're done, stop both services.
 # Find the PID listening on a port, then stop it
 Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 Get-NetTCPConnection -LocalPort 8080 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Get-NetTCPConnection -LocalPort 5173 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 ```
 
 **Confirm both are down:**
 ```bash
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health   # 000 = down
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/api/ships/berths   # 000 = down
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/api/port   # 000 = down
 ```
 
 ---
@@ -347,7 +408,7 @@ Once Phase 0 is done and the model is trained, the day-to-day loop is just:
 cd port-scheduler-api ; .\gradlew bootRun --console=plain
 
 # Terminal 3 — test
-curl -s -X POST http://127.0.0.1:8080/api/ships/schedule -H "Content-Type: application/json" -d '{"vesselId":"V001","lat":60.1,"lon":4.9,"sog":12.5,"cog":210.0,"destLat":60.39,"destLon":5.32}'
+curl -s -X POST http://127.0.0.1:8080/api/operator/eta -H "Content-Type: application/json" -d '{"vesselId":"V001","lat":61.62,"lon":4.40,"sog":13.0,"cog":92.0,"destLat":61.612,"destLon":5.07}'
 ```
 
 ---
@@ -359,8 +420,8 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule -H "Content-Type: appli
 | `ModuleNotFoundError: feature_engineer` when starting FastAPI | `src/` not on the import path | Add `--app-dir src` to the uvicorn command (Phase 3) |
 | `train.py` errors: no data | Phase 1 not run | Run `feature_engineer.py --n-files -1` first |
 | FastAPI won't load model | `models/eta_xgb.pkl` missing | Run `train.py` (Phase 2) first |
-| `/schedule` returns 500, FastAPI log shows `Unsupported upgrade request` / 422 | JDK HttpClient defaulted to HTTP/2 (h2c upgrade dropped the body) | Already fixed in `EtaService` (forces HTTP/1.1). If it recurs, confirm that fix is present |
-| `/schedule` fails, FastAPI not reachable | FastAPI (:8000) not running | Start Phase 3 before Phase 4 |
+| `/api/operator/eta` returns 500, FastAPI log shows `Unsupported upgrade request` / 422 | JDK HttpClient defaulted to HTTP/2 (h2c upgrade dropped the body) | Already fixed in `EtaService` (forces HTTP/1.1). If it recurs, confirm that fix is present |
+| `/api/operator/eta` fails, FastAPI not reachable | FastAPI (:8000) not running | Start Phase 3 before Phase 4 |
 | `curl` returns `000` | Nothing listening on that port | The service isn't running — start it |
 | Port already in use | A previous run didn't shut down | Kill the PID on that port (Phase 6) |
 | Spring Boot `bootRun` fails on first run | Dependencies still downloading / wrong Java | Confirm `java -version` is 21; let the first build finish |
@@ -368,8 +429,12 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule -H "Content-Type: appli
 | `bootRun` fails with `Unknown database 'port_core'` | Database not created | `CREATE DATABASE port_core;` (Phase 0.3) |
 | `bootRun` fails with `Schema-validation: missing column` or `missing table` | An entity class and the schema disagree | Add a new Flyway migration for the change; do not edit one that has been applied |
 | `bootRun` fails with `Migration checksum mismatch` | An already-applied migration file was edited | Revert the edit and put the change in a new `V<n>__*.sql` file |
-| `/schedule` gives `BERTHED`/`QUEUED` results you did not expect | State from an earlier run is still stored | Release berths or empty the transaction tables (Phase 4 note) |
-| `PUT .../release` returns `404` | No berth with that id | Use `B1`–`B4`; `GET /berths` lists them |
+| A ship is queued, or gets a berth, when you did not expect it | State from an earlier run is still stored | Press *Reset the port* in the console, or empty the transaction tables (Phase 4 note) |
+| `PUT .../release` returns `404` | No berth with that code | Use `B1`–`B4`; `GET /api/port` lists them |
+| Console says "The scheduler is not answering" | Spring Boot (:8080) is not running | Start Phase 4, then reload the page |
+| Console says the scheduler could not get an ETA | FastAPI (:8000) is not running | Start Phase 3 |
+| The console's map is blank | No internet (the map background is fetched), or the browser has no WebGL | Positions are still in the Arrivals table; reconnect to see the map |
+| A story says the port must be reset | Visits from an earlier run are still open | Press *Reset the port* in the Stories bar |
 
 ---
 
@@ -383,4 +448,6 @@ curl -s -X POST http://127.0.0.1:8080/api/ships/schedule -H "Content-Type: appli
 | Bi-GRU experiment | `docs/bigru-explained.md` |
 | FastAPI model service | `docs/fastapi-service-explained.md` |
 | Spring Boot scheduler | `docs/spring-boot-service-explained.md` |
+| The console | `docs/frontend-explained.md` |
+| Every endpoint, request by request, against the DCSA standard | `docs/END-TO-END-GUIDE.md` |
 | The original plan | `docs/ROADMAP.md` |

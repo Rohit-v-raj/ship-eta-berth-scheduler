@@ -26,64 +26,71 @@
 <body>
 <main>
 <h1>System Map</h1>
-<p class="lead">How the ETA model, the scheduler, its database and its APIs fit together. State of the code on 11 October 2026.</p>
+<p class="lead">How the ETA model, the scheduler, its database and its APIs fit together. State of the code on 14 October 2026.</p>
 <nav>
   <a href="#overview">1 Overview</a><a href="#apis">2 APIs</a><a href="#flow">3 The berth conversation</a>
   <a href="#db">4 Database</a><a href="#writes">5 Who writes what</a><a href="#files">6 Files</a><a href="#status">7 Progress</a>
 </nav>
 
 <h2 id="overview">1. The whole system</h2>
-<p class="note">Read left to right: a caller hits a controller, the controller calls services, services use repositories, repositories read and write MySQL. Only <code>EtaService</code> talks to the Python model.</p>
+<p class="note">Read left to right: a caller hits a controller, the controller calls services, services use repositories, repositories read and write MySQL. There are four controllers, one per flow. Only <code>EtaService</code> talks to the Python model.</p>
 <div class="box"><pre class="mermaid">
 flowchart LR
   subgraph WHO["Who calls"]
     OP["Vessel operator"]
-    TM["Terminal staff"]
+    TM["Terminal planner"]
+    UI["Port Call Console<br/>(React, port 5173)"]
     CS["Carrier system<br/>(DCSA events)"]
     US["Anyone asking<br/>the assistant"]
   end
-  subgraph CTRL["Controllers"]
-    PC["PortController<br/>/api/ships"]
-    VOC["VesselOperatorController<br/>/api/operator"]
-    DC["PortCallEventsController<br/>/api/port-call/v2"]
+  subgraph CTRL["Controllers, one per flow"]
+    DC["PortCallEventsController<br/>/api/port-call/v2/events<br/>the berth conversation"]
+    VOC["VesselOperatorController<br/>/api/operator/eta<br/>the operator's calculator"]
+    CC["ConsoleController<br/>/api/port, /api/visits<br/>the console's reads,<br/>release, cancel"]
     AC["AgentController<br/>/api/agent"]
   end
   subgraph SVC["Services"]
-    ES["EtaService<br/>predict"]
-    VVS["VesselVisitService<br/>schedule, declareEta, replan,<br/>confirm, omit, arrived, departed"]
-    BS["BerthService<br/>allocate, reschedule, release,<br/>cancel, arrive, depart, status"]
-    PR["PlanningRules<br/>typicalStay, economicalSpeed,<br/>advisedSpeed"]
-    PUB["PortCallEventPublisher<br/>find"]
     REC["PortCallEventReceiver<br/>receive"]
+    PUB["PortCallEventPublisher<br/>find"]
+    VVS["VesselVisitService<br/>declareEta, confirm, omit,<br/>arrived, departed,<br/>cancelByTerminal"]
+    BS["BerthService<br/>reschedule, release, cancel,<br/>arrive, depart, replan,<br/>scheduleMaintenance"]
+    PR["PlanningRules<br/>typicalStay, economicalSpeed,<br/>advisedSpeed"]
+    PVS["PortViewService<br/>port, visits, visit, berthPlan<br/>(read only)"]
+    ES["EtaService<br/>predict"]
     HM["HarborMasterAgentService"]
   end
-  RP["Repositories<br/>(7 Spring Data interfaces)"]
-  DB[("MySQL port_core<br/>9 tables, Flyway V1-V6")]
+  RP["Repositories<br/>(8 Spring Data interfaces)"]
+  DB[("MySQL port_core<br/>10 tables, Flyway V1-V8")]
   PY["FastAPI predict_api.py<br/>port 8000, /predict"]
   ML["models/eta_xgb.pkl<br/>XGBoost"]
   GM["Gemini"]
   TL["PortDispatchTools<br/>(sample data only)"]
 
-  OP --> PC
+  OP --> UI
+  TM --> UI
+  UI --> DC
+  UI --> VOC
+  UI --> CC
+  OP --> DC
   OP --> VOC
-  TM --> PC
   CS --> DC
   US --> AC
-  PC --> ES
-  PC --> VVS
-  PC --> BS
-  VOC --> ES
-  VOC --> VVS
-  DC --> PUB
   DC --> REC
+  DC --> PUB
   REC --> VVS
   VVS --> BS
-  VVS --> PR
   BS --> PR
+  VOC --> ES
+  VOC --> PVS
+  VOC --> PR
+  CC --> PVS
+  CC --> BS
+  CC --> VVS
   ES --> PY --> ML
   VVS --> RP
   BS --> RP
   PUB --> RP
+  PVS --> RP
   RP --> DB
   AC --> HM --> GM
   HM --> TL
@@ -92,52 +99,61 @@ flowchart LR
 <h2 id="apis">2. What each API does</h2>
 <div class="box"><table>
 <tr><th>Endpoint</th><th>Who uses it</th><th>What it does</th><th>Code path</th></tr>
-<tr><td><code>POST /api/ships/schedule</code></td><td>Operator</td><td>Position in. Model ETA, then a berth or a queue place, a requested arrival and, if useful, an advised speed.</td><td><code>PortController.schedule</code> → <code>EtaService.predict</code> → <code>VesselVisitService.schedule</code> → <code>BerthService.allocate</code></td></tr>
-<tr><td><code>GET /api/ships/berths</code></td><td>Terminal</td><td>Each berth, whether occupied and by which vessel.</td><td><code>PortController.berths</code> → <code>BerthService.status</code></td></tr>
-<tr><td><code>PUT /api/ships/berths/{id}/release</code></td><td>Terminal</td><td>Frees a berth; the vessel is departed and the berth goes to the head of the queue.</td><td><code>PortController.release</code> → <code>BerthService.release</code> → <code>handOver</code></td></tr>
-<tr><td><code>POST /api/operator/eta</code></td><td>Operator</td><td>Asks the model for an ETA. Stores nothing.</td><td><code>VesselOperatorController.eta</code> → <code>EtaService.predict</code></td></tr>
-<tr><td><code>POST /api/operator/vessels/{id}/accept</code></td><td>Operator</td><td>Accepts the requested arrival; it becomes the planned arrival. A stale time gets 409.</td><td><code>.accept</code> → <code>VesselVisitService.confirm</code></td></tr>
-<tr><td><code>POST /api/operator/vessels/{id}/reject</code></td><td>Operator</td><td>Declines with the time the vessel can make; answered with a new requested arrival.</td><td><code>.reject</code> → <code>VesselVisitService.replan</code> → <code>declareEta</code> → <code>BerthService.reschedule</code></td></tr>
-<tr><td><code>POST /api/operator/vessels/{id}/omit</code></td><td>Operator</td><td>Skips the call; its berth or queue place passes on.</td><td><code>.omit</code> → <code>VesselVisitService.omit</code> → <code>BerthService.cancel</code> → <code>handOver</code></td></tr>
-<tr><td><code>GET /api/port-call/v2/events</code></td><td>Any DCSA party</td><td>Publishes our timestamps in DCSA Port Call 2.0 format, with filters and paging.</td><td><code>PortCallEventsController.events</code> → <code>PortCallEventPublisher.find</code></td></tr>
-<tr><td><code>POST /api/port-call/v2/events</code></td><td>Carrier system</td><td>Receives DCSA berth events: estimated, planned and actual arrival, actual departure, omitted call. Answers with feedback per event.</td><td><code>.receive</code> → <code>PortCallEventReceiver.receive</code> → <code>VesselVisitService</code></td></tr>
+<tr><td><code>POST /api/port-call/v2/events</code></td><td>Vessel operator, carrier system</td><td>The berth conversation, as DCSA Port Call events: an estimated arrival (EST) opens or replans a call and may carry the ship's position; a planned arrival (PLN) accepts the terminal's request; actual arrival and departure (ACT); an omitted call. The only way a call begins, changes or ends. Answers with feedback per event; a stale acceptance is refused there.</td><td><code>PortCallEventsController.receive</code> → <code>PortCallEventReceiver.receive</code> → <code>VesselVisitService.declareEta</code> / <code>confirm</code> / <code>arrived</code> / <code>departed</code> / <code>omit</code> → <code>BerthService</code></td></tr>
+<tr><td><code>GET /api/port-call/v2/events</code></td><td>Any DCSA party</td><td>Publishes the timestamps in DCSA Port Call 2.0 format, with filters and paging. This is where a carrier reads the terminal's requested arrival (REQ).</td><td><code>PortCallEventsController.events</code> → <code>PortCallEventPublisher.find</code></td></tr>
+<tr><td><code>POST /api/operator/eta</code></td><td>Vessel operator</td><td>The operator's calculator: the model's ETA for a position and, when the terminal has requested an arrival, the speed that meets it. Stores nothing.</td><td><code>VesselOperatorController.eta</code> → <code>EtaService.predict</code>, <code>PortViewService.visits</code>, <code>PlanningRules.advisedSpeedKnots</code></td></tr>
+<tr><td><code>GET /api/port</code></td><td>Console</td><td>The port, its terminals and its berths with coordinates and limits. Read only.</td><td><code>ConsoleController.port</code> → <code>PortViewService.port</code></td></tr>
+<tr><td><code>GET /api/visits</code>, <code>GET /api/visits/{ref}</code></td><td>Console</td><td>Visits in progress (berth or queue number, the four arrival times, the last position the ship gave, when its answer to the request is due), and one visit with its whole ledger. Read only.</td><td><code>ConsoleController.visits</code> / <code>.visit</code> → <code>PortViewService</code></td></tr>
+<tr><td><code>GET /api/port/berth-plan</code></td><td>Console</td><td>Berth windows over a period: every open one, and completed ones that overlap it. Read only.</td><td><code>ConsoleController.berthPlan</code> → <code>PortViewService.berthPlan</code></td></tr>
+<tr><td><code>PUT /api/port/berths/{code}/release</code></td><td>Terminal planner</td><td>Frees a berth when the ship's side has not reported leaving; the vessel is departed and the berth goes to the head of the queue.</td><td><code>ConsoleController.release</code> → <code>BerthService.release</code> → <code>replan</code></td></tr>
+<tr><td><code>GET /api/port/maintenance</code>, <code>POST</code> / <code>DELETE /api/port/berths/{code}/maintenance</code></td><td>Terminal planner</td><td>Berth maintenance: the windows not yet over, schedule one, remove one. A window over the berth's booking or another window is refused; no ship is planned on a berth for a stay that runs into one.</td><td><code>ConsoleController</code> → <code>BerthService.scheduleMaintenance</code> / <code>removeMaintenance</code> → <code>replan</code></td></tr>
+<tr><td><code>PUT /api/visits/{ref}/cancel</code></td><td>Terminal planner</td><td>Cancels the call of a ship that has not arrived, typically one that never answered the requested arrival. A berth it held goes to the head of the queue, and the feed publishes the berth service as cancelled by the terminal. Refused for a ship alongside.</td><td><code>ConsoleController.cancel</code> → <code>VesselVisitService.cancelByTerminal</code> → <code>BerthService.cancel</code> → <code>replan</code></td></tr>
 <tr><td><code>GET /api/agent/ping</code>, <code>POST /chat</code>, <code>POST /evaluate</code></td><td>Anyone</td><td>Gemini assistant. Its tools return fixed sample data, so answers do not reflect real berths.</td><td><code>AgentController</code> → <code>HarborMasterAgentService</code> → <code>PortDispatchTools</code></td></tr>
 <tr><td><code>GET /health</code>, <code>POST /predict</code> (port 8000)</td><td>The scheduler</td><td>The Python model service: rebuilds the training features and returns the ETA in minutes.</td><td><code>src/predict_api.py</code> → <code>models/eta_xgb.pkl</code></td></tr>
 </table></div>
 
 <h2 id="flow">3. The berth conversation, step by step</h2>
-<p class="note">The four kinds of time: EST estimated (the ship or the model), REQ requested (the terminal), PLN planned (the ship's acceptance), ACT actual.</p>
+<p class="note">The four kinds of time: EST estimated (the ship), REQ requested (the terminal), PLN planned (the ship's acceptance), ACT actual. The terminal sends times and never a speed; working out a speed is the operator's own sum. A berth is held from the terminal's answer, not from the ship's acceptance. After every change to the berth plan the terminal works out the waiting ships' times again and re-issues those that moved by 15 minutes or more.</p>
 <div class="box"><pre class="mermaid">
 sequenceDiagram
   participant O as Vessel operator
   participant A as Scheduler (Spring Boot)
   participant M as ETA model (FastAPI)
   participant D as MySQL
-  O->>A: POST /api/ships/schedule (position, speed, destination)
+  participant P as Terminal planner
+  O->>A: POST /api/operator/eta (position, speed)
   A->>M: POST /predict
   M-->>A: ETA in minutes
-  A->>D: vessel, vessel_visit, eta_prediction, EST event
+  A-->>O: estimated arrival (nothing stored)
+  O->>A: POST /api/port-call/v2/events (EST arrival, with position)
+  A->>D: vessel, vessel_visit, EST event, position
   alt a berth is free
-    A->>D: berth_allocation with planned end, REQ event (requested = ETA)
-    A-->>O: BERTHED, berth, requestedArrival
+    A->>D: berth_allocation with planned end, REQ event (requested = the estimate)
   else port is full
     A->>D: REQ event (requested = when a berth is expected free)
-    A-->>O: QUEUED, queue number, requestedArrival, advisedSpeedKnots
   end
+  O->>A: GET /api/visits or GET /api/port-call/v2/events
+  A-->>O: berth or queue place, requested arrival
+  O->>A: POST /api/operator/eta (same position)
+  A-->>O: the speed that meets the requested arrival
   alt operator accepts
-    O->>A: POST /api/operator/vessels/{id}/accept
+    O->>A: POST /api/port-call/v2/events (PLN arrival = requested time)
     A->>D: pta_berth, PLN event
-  else operator rejects
-    O->>A: POST /api/operator/vessels/{id}/reject (time it can make)
+  else operator proposes another time
+    O->>A: POST /api/port-call/v2/events (EST arrival: time it can make)
     A->>D: new EST event, new REQ event, acceptance cleared
-    A-->>O: new requestedArrival
   else operator omits the call
-    O->>A: POST /api/operator/vessels/{id}/omit
-    A->>D: visit CANCELLED, berth handed to queue head
+    O->>A: POST /api/port-call/v2/events (omitted port call)
+    A->>D: visit CANCELLED by the vessel, berth handed to queue head
+  else no answer within 60 minutes
+    A-->>P: GET /api/visits shows the answer overdue
+    P->>A: PUT /api/visits/{ref}/cancel (the planner's decision)
+    A->>D: visit CANCELLED by the terminal, berth handed to queue head
   end
-  O->>A: POST /api/port-call/v2/events (actual arrival)
+  O->>A: POST /api/port-call/v2/events (ACT arrival)
   A->>D: ata_berth, visit BERTHED, allocation ACTIVE, ACT event
-  O->>A: actual departure event, or terminal PUT release
+  A->>D: planned end = arrival + stay, new REQ for waiting ships whose time moved
+  O->>A: POST /api/port-call/v2/events (ACT departure), or planner PUT release
   A->>D: allocation COMPLETED, visit DEPARTED, ACT event
   A->>D: berth allocated to the head of the queue, REQ event
 </pre></div>
@@ -156,6 +172,7 @@ erDiagram
   VESSEL_VISIT ||--o{ ETA_PREDICTION : "predicted by"
   VESSEL_VISIT ||--o{ VISIT_EVENT : logs
   BERTH |o--o{ VISIT_EVENT : "refers to"
+  BERTH ||--o{ BERTH_MAINTENANCE : "closed by"
   PORT {
     string un_locode
     string name
@@ -208,6 +225,11 @@ erDiagram
     float distance_nm
     datetime predicted_arrival
   }
+  BERTH_MAINTENANCE {
+    datetime starts_at
+    datetime ends_at
+    string reason
+  }
   VISIT_EVENT {
     string milestone
     string classifier
@@ -221,15 +243,16 @@ erDiagram
 <h2 id="writes">5. Which function writes which table</h2>
 <div class="box"><table>
 <tr><th>Function</th><th>vessel</th><th>vessel_visit</th><th>berth_allocation</th><th>eta_prediction</th><th>visit_event</th></tr>
-<tr><td><code>VesselVisitService.schedule</code></td><td>create, set type</td><td>create, <code>eta_berth</code>, <code>planned_service_min</code></td><td>via allocate</td><td>add row</td><td>EST (model)</td></tr>
-<tr><td><code>BerthService.allocate</code></td><td></td><td><code>rta_berth</code>, terminal</td><td>create with planned start and end</td><td></td><td>REQ (terminal)</td></tr>
+<tr><td><code>BerthService.replan</code>, for a waiting visit placed on a berth that is free now</td><td></td><td><code>rta_berth</code>, terminal</td><td>create with planned start and end</td><td></td><td>REQ (terminal)</td></tr>
 <tr><td><code>VesselVisitService.confirm</code></td><td></td><td><code>pta_berth</code></td><td></td><td></td><td>PLN (vessel)</td></tr>
-<tr><td><code>VesselVisitService.declareEta</code> / <code>replan</code></td><td>create if unknown</td><td><code>eta_berth</code>; <code>rta_berth</code> reset, <code>pta_berth</code> cleared</td><td>move planned start and end</td><td></td><td>EST (vessel), REQ (terminal)</td></tr>
-<tr><td><code>VesselVisitService.omit</code> → <code>BerthService.cancel</code></td><td></td><td>phase CANCELLED, remark</td><td>CANCELLED; new one for queue head</td><td></td><td>REQ for the promoted vessel</td></tr>
-<tr><td><code>VesselVisitService.arrived</code> → <code>BerthService.arrive</code></td><td></td><td><code>ata_berth</code>, phase BERTHED</td><td>ACTIVE, <code>actual_start</code></td><td></td><td>ACT arrival (vessel)</td></tr>
+<tr><td><code>VesselVisitService.declareEta</code></td><td>create if unknown</td><td>create if none open; <code>eta_berth</code>, <code>planned_service_min</code>, <code>arrival_draft_m</code>; <code>rta_berth</code> set, <code>pta_berth</code> cleared</td><td>create, or move planned start and end, or withdraw (CANCELLED) when the ship has fallen behind and a waiting ship can come sooner</td><td>add a row if the estimate carried a position</td><td>EST (vessel), REQ (terminal)</td></tr>
+<tr><td><code>VesselVisitService.omit</code> / <code>cancelByTerminal</code> → <code>BerthService.cancel</code></td><td></td><td>phase CANCELLED, <code>cancelled_by</code> VESSEL or TERMINAL, remark</td><td>CANCELLED; new one for queue head</td><td></td><td>REQ for the promoted vessel</td></tr>
+<tr><td><code>VesselVisitService.arrived</code> → <code>BerthService.arrive</code></td><td></td><td><code>ata_berth</code>, phase BERTHED</td><td>ACTIVE, <code>actual_start</code>; planned end moved to arrival plus stay</td><td></td><td>ACT arrival (vessel)</td></tr>
 <tr><td><code>BerthService.release</code> / <code>depart</code></td><td></td><td><code>atd_berth</code>, phase DEPARTED</td><td>COMPLETED, <code>actual_end</code>; new one for queue head</td><td></td><td>ACT departure; REQ for the promoted vessel</td></tr>
-<tr><td><code>VesselVisitService.resolveVessel</code></td><td>create from IMO, MMSI or name</td><td></td><td></td><td></td><td></td></tr>
-<tr><td><code>PortCallEventPublisher.find</code>, <code>BerthService.status</code></td><td colspan="5">read only</td></tr>
+<tr><td><code>BerthService.replan</code>, for every other waiting visit; run after every row above except <code>confirm</code></td><td></td><td>for each waiting visit whose time moved by the threshold: <code>rta_berth</code> set, <code>pta_berth</code> cleared</td><td></td><td></td><td>REQ (terminal)</td></tr>
+<tr><td><code>BerthService.scheduleMaintenance</code> / <code>removeMaintenance</code></td><td colspan="5">add or delete a <code>berth_maintenance</code> row, then <code>replan</code> as above</td></tr>
+<tr><td><code>VesselVisitService.resolveVessel</code></td><td>create from IMO, MMSI or name; set type</td><td></td><td></td><td></td><td></td></tr>
+<tr><td><code>PortCallEventPublisher.find</code>, <code>PortViewService</code> (all four), <code>VesselOperatorController.eta</code></td><td colspan="5">read only</td></tr>
 </table></div>
 <p class="note">port, terminal, quay and berth are filled once by migration <code>V4</code> (demo port Florø, berths B1 to B4) and not written by any function.</p>
 
@@ -239,15 +262,16 @@ erDiagram
 <tr><td>Python: data</td><td><code>src/data_loader.py</code>, <code>src/feature_engineer.py</code></td><td>Reads raw AIS, cleans sentinel values, cuts voyages, builds features and the minutes-to-arrival label.</td></tr>
 <tr><td>Python: model</td><td><code>src/train.py</code>, <code>src/train_bigru.py</code></td><td>Trains XGBoost (in use) and the Bi-GRU experiment (not in use).</td></tr>
 <tr><td>Python: service</td><td><code>src/predict_api.py</code></td><td>FastAPI <code>/health</code> and <code>/predict</code>.</td></tr>
-<tr><td>Java: controllers</td><td><code>controller/PortController</code>, <code>VesselOperatorController</code>, <code>AgentController</code>, <code>dcsa/PortCallEventsController</code></td><td>The HTTP endpoints in section 2.</td></tr>
-<tr><td>Java: services</td><td><code>service/EtaService</code>, <code>VesselVisitService</code>, <code>BerthService</code>, <code>PlanningRules</code>, <code>HarborMasterAgentService</code></td><td>The logic: call the model, run the visit, allocate berths, the reference figures for stay and speed.</td></tr>
+<tr><td>Console</td><td><code>port-console/src/</code>: <code>api/</code>, <code>session/</code>, <code>features/</code> planner, operator, events, map, story, wire</td><td>The React app: screens for the planner and the operator, the event feed, the wire inspector and the stories. See <code>docs/frontend-explained.md</code>.</td></tr>
+<tr><td>Java: controllers</td><td><code>controller/PortCallEventsController</code>, <code>VesselOperatorController</code>, <code>ConsoleController</code>, <code>AgentController</code></td><td>The HTTP endpoints in section 2: four controllers, one per flow.</td></tr>
+<tr><td>Java: services</td><td><code>service/EtaService</code>, <code>VesselVisitService</code>, <code>BerthService</code>, <code>PlanningRules</code>, <code>PortViewService</code>, <code>HarborMasterAgentService</code></td><td>The logic: call the model, run the visit, allocate berths, the reference figures for stay and speed, and the read-only views for the console.</td></tr>
 <tr><td>Java: DCSA</td><td><code>dcsa/PortCallMessages</code>, <code>PortCallEventPublisher</code>, <code>PortCallEventReceiver</code></td><td>The standard's message shapes, and the translation to and from our own records.</td></tr>
-<tr><td>Java: entities</td><td><code>entity/topology</code> (Port, Terminal, Quay, Berth), <code>entity/vessel</code> (Vessel), <code>entity/visit</code> (VesselVisit, BerthAllocation, EtaPrediction, VisitEvent and their enums)</td><td>One class per table. <code>Milestone</code> and <code>TimeClassifier</code> carry the DCSA codes.</td></tr>
-<tr><td>Java: repositories</td><td><code>repository/</code> Berth, BerthAllocation, Vessel, VesselVisit, EtaPrediction, VisitEvent, Port</td><td>Database queries, including the locked "free berths" query and the waiting-queue query.</td></tr>
-<tr><td>Java: request and response shapes</td><td><code>model/</code> ScheduleRequest, ScheduleResponse, EtaRequest, EtaResponse, EtaEstimate, ConfirmRequest, RejectRequest, VisitDecision</td><td>The JSON of our own endpoints.</td></tr>
+<tr><td>Java: entities</td><td><code>entity/topology</code> (Port, Terminal, Quay, Berth), <code>entity/vessel</code> (Vessel), <code>entity/visit</code> (VesselVisit, BerthAllocation, EtaPrediction, VisitEvent and their enums), <code>BerthMaintenance</code> in topology</td><td>One class per table. <code>Milestone</code> and <code>TimeClassifier</code> carry the DCSA codes.</td></tr>
+<tr><td>Java: repositories</td><td><code>repository/</code> Berth, BerthAllocation, BerthMaintenance, Vessel, VesselVisit, EtaPrediction, VisitEvent, Port</td><td>Database queries, including the berth lock taken before every change to the plan, and the waiting-queue query.</td></tr>
+<tr><td>Java: request and response shapes</td><td><code>model/</code> EtaQuery, EtaEstimate, EtaRequest, EtaResponse; <code>model/view/</code> PortView, VisitView, VisitDetailView, BerthPlanView</td><td>The JSON of our own endpoints.</td></tr>
 <tr><td>Java: errors</td><td><code>exceptions/</code> GlobalExceptionHandler, BerthNotFound, VisitNotFound, VisitConflict</td><td>404 and 409 responses.</td></tr>
-<tr><td>Database schema</td><td><code>resources/db/migration/V1</code> to <code>V6</code></td><td>Topology, vessel, visit tables, demo port, IMO width, planned service time.</td></tr>
-<tr><td>Tests</td><td><code>src/test/</code>, 8 classes, 54 tests</td><td>Migrations, scheduling flow, planning rules, both controllers' JSON, DCSA publishing and receiving.</td></tr>
+<tr><td>Database schema</td><td><code>resources/db/migration/V1</code> to <code>V8</code></td><td>Topology, vessel, visit tables, demo port, IMO width, planned service time, who cancelled a call, berth maintenance.</td></tr>
+<tr><td>Tests</td><td><code>src/test/</code>, 9 classes, 101 tests; <code>port-console/</code>, 69 tests</td><td>Java: migrations, scheduling flow, planning rules, the read views, each controller's JSON, DCSA publishing and receiving. Console: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts.</td></tr>
 </table></div>
 <p class="note">Java paths are under <code>port-scheduler-api/src/main/java/com/port/scheduler/</code>.</p>
 
@@ -255,16 +279,23 @@ erDiagram
 <div class="box"><table>
 <tr><th>Area</th><th>State</th><th>Notes</th></tr>
 <tr><td>ETA model and its service</td><td class="ok">Working</td><td>XGBoost, 69 min mean error on unseen vessels. Its label counts idle time near the berth as sailing, which makes it pessimistic close to port.</td></tr>
-<tr><td>Persistence and data model</td><td class="ok">Working</td><td>9 tables, state survives a restart.</td></tr>
-<tr><td>Berth and queue</td><td class="ok">Working</td><td>First free berth, queue with requested arrival and speed advice, released berth goes to the queue head.</td></tr>
-<tr><td>Operator decisions</td><td class="ok">Working</td><td>Accept, reject with a new time, omit.</td></tr>
+<tr><td>Persistence and data model</td><td class="ok">Working</td><td>10 tables, state survives a restart.</td></tr>
+<tr><td>Berth and queue</td><td class="ok">Working</td><td>First free berth, a queue with a requested arrival for each ship, released berth goes to the queue head. Waiting ships' times are worked out again whenever the berth plan changes.</td></tr>
+<tr><td>Berth fit and maintenance</td><td class="ok">Working</td><td>A ship is given only a berth its length, beam and draft fit, and refused if it fits none. Maintenance windows are recorded in advance and planned around.</td></tr>
+<tr><td>Late booked ships</td><td class="ok">Working</td><td>A ship holding a berth that falls more than 4 hours behind its agreed time gives it up, if a waiting ship can be alongside sooner; it keeps its place in line.</td></tr>
+<tr><td>Unanswered requests</td><td class="ok">Working</td><td>A berth is held from the terminal's answer. A reply 60 minutes late is flagged on the planner's screen, and the planner can cancel the call. Nothing is cancelled automatically.</td></tr>
+<tr><td>Operator's calculator</td><td class="ok">Working</td><td>The model's ETA for a position and the speed that meets the terminal's requested arrival. The terminal itself sends a time, never a speed.</td></tr>
+<tr><td>Operator decisions</td><td class="ok">Working</td><td>Estimate, accept, propose another time, omit, arrive, depart: all DCSA Port Call events, the one route into a call.</td></tr>
+<tr><td>Console (React)</td><td class="ok">Working</td><td>Planner and operator screens, event feed, wire inspector, stories. Seats instead of login.</td></tr>
 <tr><td>DCSA Port Call 2.0</td><td class="ok">Working</td><td>Publishes and receives berth events. Not run through DCSA's conformance sandbox.</td></tr>
 <tr><td>Queue reordering when a ship is late</td><td class="todo">Must solve</td><td>The queue never reorders, so a berth can stand empty for a delayed ship.</td></tr>
+<tr><td>Time-driven replanning</td><td class="todo">Not started</td><td>Waiting times follow events, not the clock: a berthed ship that overstays changes nothing until the next event.</td></tr>
 <tr><td>ETA label fix</td><td class="todo">Next</td><td>End each training voyage when the ship stops, not when the crew sets "moored".</td></tr>
-<tr><td>Fit checks in allocation</td><td class="todo">Not started</td><td>Ship length and draft against berth limits; the data is in place.</td></tr>
+<tr><td>Type checks in allocation</td><td class="todo">Not started</td><td>Vessel type against terminal type; the data is in place.</td></tr>
+<tr><td>Overstays</td><td class="todo">Deferred</td><td>A planned end is a median stay, so half of all ships pass it. Needs a real departure time during the stay.</td></tr>
 <tr><td>Service time by cargo amount</td><td class="todo">Not started</td><td>Stay depends on vessel type only; no reliable handling rates were found.</td></tr>
 <tr><td>Assistant tools</td><td class="todo">Stub</td><td>Returns sample data.</td></tr>
-<tr><td>Login and permissions</td><td class="todo">Not started</td><td>Every endpoint is open.</td></tr>
+<tr><td>Login and permissions</td><td class="todo">Not started</td><td>Every endpoint is open. The console already has roles and one list of permissions, so login replaces its seat switcher.</td></tr>
 </table></div>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.min.js"></script>
