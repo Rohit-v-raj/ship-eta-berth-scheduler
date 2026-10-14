@@ -1,0 +1,69 @@
+/*
+ * Design tokens. Every colour in the app comes from here, by role, so light
+ * and dark are swapped in one place.
+ *
+ * Chrome, the two chart colours and the status colours are a validated
+ * palette: the chart pair passes the colour-blind separation checks on both
+ * surfaces. Status colours are reserved for state and always ship with an icon
+ * and a label.
+ */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f1f0eb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --line: #e1e0d9;
+  --line-strong: #c3c2b7;
+
+  /* interactive accent: dark enough for white text on it */
+  --accent: #256abf;
+  --accent-hover: #1c5cab;
+  --accent-ink: #ffffff;
+  --accent-wash: #cde2fb;
+
+  /* chart series, in fixed order */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-quiet: #c3c2b7;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.06), 0 8px 24px rgba(11, 11, 11, 0.08);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #242423;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --line: #2c2c2a;
+  --line-strong: #383835;
+
+  --accent: #3987e5;
+  --accent-hover: #5598e7;
+  --accent-ink: #0b0b0b;
+  --accent-wash: #104281;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-quiet: #52514e;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.5);
+}

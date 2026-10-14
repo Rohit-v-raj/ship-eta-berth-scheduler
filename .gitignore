@@ -37,6 +37,11 @@ port-scheduler-api/bin/
 # Local secrets (API key, DB password) — copy secrets.properties.example
 port-scheduler-api/secrets.properties
 
+# Port Call Console (React) — installed packages, build output, local settings
+port-console/node_modules/
+port-console/dist/
+port-console/.env.local
+
 # Jupyter
 .ipynb_checkpoints/
 
