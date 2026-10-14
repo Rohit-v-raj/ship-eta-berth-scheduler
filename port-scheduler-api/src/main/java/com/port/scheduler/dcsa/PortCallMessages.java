@@ -52,7 +52,7 @@ public final class PortCallMessages {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PortCallService(UUID portCallServiceID, String portCallServiceTypeCode,
                                   String portCallServiceEventTypeCode, String portCallPhaseTypeCode,
-                                  String facilityTypeCode, Location serviceLocation) {}
+                                  String facilityTypeCode, Location serviceLocation, Boolean isCanceled) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Location(String locationName, @JsonProperty("UNLocationCode") String unLocationCode,
@@ -66,6 +66,7 @@ public final class PortCallMessages {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Vessel(String vesselIMONumber, String vesselMMSINumber, String vesselName,
-                         String vesselCallSign, String vesselTypeCode, String vesselSizeUnit,
+                         String vesselCallSign, String vesselTypeCode,
+                         Location vesselPosition, Double milesToDestinationPort, String vesselSizeUnit,
                          Double lengthOverall, Double width, String draftUnit, Double airDraft, Double draft) {}
 }

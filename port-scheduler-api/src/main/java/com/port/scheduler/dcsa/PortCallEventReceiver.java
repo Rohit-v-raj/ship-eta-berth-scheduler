@@ -2,11 +2,14 @@ package com.port.scheduler.dcsa;
 
 import com.port.scheduler.dcsa.PortCallMessages.Event;
 import com.port.scheduler.dcsa.PortCallMessages.FeedbackElement;
+import com.port.scheduler.dcsa.PortCallMessages.GeoCoordinate;
 import com.port.scheduler.dcsa.PortCallMessages.PortCallService;
 import com.port.scheduler.dcsa.PortCallMessages.Timestamp;
 import com.port.scheduler.dcsa.PortCallMessages.Vessel;
 import com.port.scheduler.entity.vessel.VesselType;
 import com.port.scheduler.service.VesselVisitService;
+import com.port.scheduler.service.VesselVisitService.ReportedPosition;
+import com.port.scheduler.service.VesselVisitService.VesselSize;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -24,6 +27,8 @@ import java.util.List;
  */
 @Service
 public class PortCallEventReceiver {
+
+    private static final double FEET_TO_METRES = 0.3048;
 
     private final VesselVisitService visits;
 
@@ -76,7 +81,7 @@ public class PortCallEventReceiver {
                 if (!arrival) {
                     return "Not processed: an estimated departure is addressed to the port authority";
                 }
-                visits.declareEta(vesselId, timestamp.serviceDateTime());
+                visits.declareEta(vesselId, timestamp.serviceDateTime(), position(vessel), size(vessel));
             }
             case "PLN" -> {
                 if (!arrival) {
@@ -97,6 +102,65 @@ public class PortCallEventReceiver {
                     "Unknown classifierCode '" + timestamp.classifierCode() + "'; use EST, PLN or ACT");
         }
         return null;
+    }
+
+    /**
+     * Where the vessel says it is, from the standard's optional
+     * {@code vesselPosition} and {@code milesToDestinationPort}. Null when the
+     * event carries neither.
+     */
+    private static ReportedPosition position(Vessel vessel) {
+        GeoCoordinate at = vessel.vesselPosition() == null ? null : vessel.vesselPosition().geoCoordinate();
+        Double miles = vessel.milesToDestinationPort();
+        if (at == null && miles == null) {
+            return null;
+        }
+        if (miles != null && miles < 0) {
+            throw new IllegalArgumentException("milesToDestinationPort cannot be negative");
+        }
+        if (at == null) {
+            return new ReportedPosition(null, null, miles);
+        }
+        try {
+            double lat = Double.parseDouble(at.latitude());
+            double lon = Double.parseDouble(at.longitude());
+            if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+                throw new NumberFormatException();
+            }
+            return new ReportedPosition(lat, lon, miles);
+        } catch (NumberFormatException | NullPointerException e) {
+            throw new IllegalArgumentException(
+                    "vesselPosition needs a latitude from -90 to 90 and a longitude from -180 to 180, in decimal degrees");
+        }
+    }
+
+    /**
+     * The vessel's size, from the standard's optional {@code lengthOverall} and
+     * {@code width} (in {@code vesselSizeUnit}) and {@code draft} (in
+     * {@code draftUnit}), converted to metres. Null when the event carries none.
+     */
+    private static VesselSize size(Vessel vessel) {
+        Double length = metres(vessel.lengthOverall(), vessel.vesselSizeUnit(), "lengthOverall", "vesselSizeUnit");
+        Double width = metres(vessel.width(), vessel.vesselSizeUnit(), "width", "vesselSizeUnit");
+        Double draft = metres(vessel.draft(), vessel.draftUnit(), "draft", "draftUnit");
+        return length == null && width == null && draft == null ? null : new VesselSize(length, width, draft);
+    }
+
+    /** A dimension in metres: {@code MTR} as given, {@code FOT} (feet) converted. A missing unit means metres. */
+    private static Double metres(Double value, String unit, String field, String unitField) {
+        if (value == null) {
+            return null;
+        }
+        if (!(value > 0) || value >= 1000) {
+            throw new IllegalArgumentException(field + " must be more than 0 and less than 1000");
+        }
+        if (unit == null || "MTR".equals(unit)) {
+            return value;
+        }
+        if ("FOT".equals(unit)) {
+            return value * FEET_TO_METRES;
+        }
+        throw new IllegalArgumentException(unitField + " must be MTR or FOT");
     }
 
     private static boolean omitted(Event event) {

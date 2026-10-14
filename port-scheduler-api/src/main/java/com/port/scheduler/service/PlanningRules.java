@@ -3,6 +3,8 @@ package com.port.scheduler.service;
 import com.port.scheduler.entity.vessel.VesselType;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 
 /**
  * Reference figures and arithmetic for berth planning.
@@ -66,5 +68,57 @@ public final class PlanningRules {
         }
         double speed = Math.max(distanceNm / hours, economicalSpeedKnots);
         return speed < currentSpeedKnots ? Math.round(speed * 10) / 10.0 : null;
+    }
+
+    /**
+     * When a vessel owes the terminal a fresh estimate: the latest of the
+     * milestones before its arrival (72, 48 and 24 hours, say) that has passed
+     * with no estimate received since. Null when none is owed. Ports commonly
+     * ask for an estimate at such milestones; DCSA's messages have no way for
+     * the terminal to ask, so this only says when one is expected.
+     */
+    public static Instant estimateDueSince(Instant arrival, Instant lastEstimate, Instant now,
+                                           List<Duration> milestones) {
+        if (arrival == null) {
+            return null;
+        }
+        Instant due = null;
+        for (Duration milestone : milestones) {
+            Instant at = arrival.minus(milestone);
+            if (!at.isAfter(now) && (due == null || at.isAfter(due))) {
+                due = at;
+            }
+        }
+        return due != null && (lastEstimate == null || lastEstimate.isBefore(due)) ? due : null;
+    }
+
+    /** The next milestone before the arrival that is still ahead; null when none is left. */
+    public static Instant nextEstimateBy(Instant arrival, Instant now, List<Duration> milestones) {
+        if (arrival == null) {
+            return null;
+        }
+        Instant next = null;
+        for (Duration milestone : milestones) {
+            Instant at = arrival.minus(milestone);
+            if (at.isAfter(now) && (next == null || at.isBefore(next))) {
+                next = at;
+            }
+        }
+        return next;
+    }
+
+    /**
+     * Speed advice for a vessel asked to arrive at {@code requested}, from the
+     * position it reported at {@code reportedAt}. There is advice only when the
+     * requested time is later than the vessel would arrive anyway: that is
+     * when slowing down replaces waiting.
+     */
+    public static Double advisedSpeedKnots(VesselType type, double distanceNm, double currentSpeedKnots,
+                                           Instant reportedAt, Instant predictedArrival, Instant requested) {
+        if (requested == null || !requested.isAfter(predictedArrival)) {
+            return null;
+        }
+        return advisedSpeedKnots(distanceNm, Duration.between(reportedAt, requested), currentSpeedKnots,
+                economicalSpeedKnots(type));
     }
 }

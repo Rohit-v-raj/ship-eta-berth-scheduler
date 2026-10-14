@@ -1,5 +1,7 @@
-package com.port.scheduler.dcsa;
+package com.port.scheduler.controller;
 
+import com.port.scheduler.dcsa.PortCallEventPublisher;
+import com.port.scheduler.dcsa.PortCallEventReceiver;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Filter;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Page;
 import com.port.scheduler.dcsa.PortCallMessages.FeedbackElement;
@@ -26,10 +28,16 @@ import java.util.Map;
 import java.util.TreeSet;
 
 /**
- * The event publisher endpoint of the DCSA Port Call standard, version 2.0.0:
- * {@code GET /events}. The standard requires a publisher to say which query
- * parameters it supports; the ones not in {@link #SUPPORTED} are refused with
- * a 400 instead of being silently ignored.
+ * The DCSA Port Call standard, version 2.0.0: the one route by which a vessel
+ * operator and the terminal agree a berth. {@code POST /events} receives the
+ * operator's timestamps (an estimate opens a call, a planned arrival accepts
+ * the terminal's request, and so on) and {@code GET /events} publishes what
+ * has been exchanged.
+ *
+ * The standard requires a publisher to say which query parameters it
+ * supports; the ones not in {@link #SUPPORTED} are refused with a 400 instead
+ * of being silently ignored. The translation to and from the standard's
+ * message shapes is in the {@code dcsa} package.
  */
 @RestController
 @RequestMapping("/api/port-call/v2")

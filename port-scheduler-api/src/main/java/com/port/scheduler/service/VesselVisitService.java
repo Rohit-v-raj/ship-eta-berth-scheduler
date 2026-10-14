@@ -1,6 +1,7 @@
 package com.port.scheduler.service;
 
 import com.port.scheduler.entity.vessel.Vessel;
+import com.port.scheduler.entity.vessel.VesselType;
 import com.port.scheduler.entity.visit.EtaPrediction;
 import com.port.scheduler.entity.visit.EventSource;
 import com.port.scheduler.entity.visit.Milestone;
@@ -11,17 +12,15 @@ import com.port.scheduler.entity.visit.VisitEvent;
 import com.port.scheduler.entity.visit.VisitPhase;
 import com.port.scheduler.exceptions.VisitConflictException;
 import com.port.scheduler.exceptions.VisitNotFoundException;
-import com.port.scheduler.model.EtaResponse;
-import com.port.scheduler.model.ScheduleRequest;
 import com.port.scheduler.repository.EtaPredictionRepository;
 import com.port.scheduler.repository.VesselRepository;
 import com.port.scheduler.repository.VesselVisitRepository;
 import com.port.scheduler.repository.VisitEventRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.port.scheduler.entity.vessel.VesselType;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -32,9 +31,10 @@ import java.util.UUID;
 /**
  * Vessel visit (port call) lifecycle.
  *
- * A visit opens the first time a vessel asks to be scheduled and stays open
- * until the vessel departs. Further requests from the same vessel are position
- * updates: they refresh that visit's ETA rather than opening a second visit.
+ * A visit opens when a vessel's operator first declares an estimated arrival
+ * and stays open until the vessel departs, its operator omits the call, or
+ * the terminal cancels it. A further estimate from the same vessel replans
+ * that visit rather than opening a second one.
  */
 @Service
 public class VesselVisitService {
@@ -42,75 +42,93 @@ public class VesselVisitService {
     private static final DateTimeFormatter REF_DATE =
             DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
 
+    /**
+     * Where a vessel said it was when it gave an estimate. Any part may be
+     * missing: the DCSA message carries position and distance as optional.
+     */
+    public record ReportedPosition(Double lat, Double lon, Double distanceNm) {}
+
+    /**
+     * The vessel's size as given with an estimate, in metres: length overall,
+     * beam, and the draft for this call. Any part may be missing.
+     */
+    public record VesselSize(Double lengthOverallMeters, Double beamMeters, Double draftMeters) {}
+
+    /** The outcome of an estimate: berth or queue place, and when the terminal asks the vessel to arrive. */
+    public record Scheduled(BerthService.Assignment assignment, Instant requestedArrival) {}
+
     private final VesselRepository vesselRepository;
     private final VesselVisitRepository visitRepository;
     private final EtaPredictionRepository predictionRepository;
     private final VisitEventRepository eventRepository;
     private final BerthService berthService;
-    private final String etaModelName;
 
     public VesselVisitService(VesselRepository vesselRepository,
                               VesselVisitRepository visitRepository,
                               EtaPredictionRepository predictionRepository,
                               VisitEventRepository eventRepository,
-                              BerthService berthService,
-                              @Value("${eta.model.name}") String etaModelName) {
+                              BerthService berthService) {
         this.vesselRepository = vesselRepository;
         this.visitRepository = visitRepository;
         this.predictionRepository = predictionRepository;
         this.eventRepository = eventRepository;
         this.berthService = berthService;
-        this.etaModelName = etaModelName;
+    }
+
+    /** {@link #declareEta(String, Instant, ReportedPosition, VesselSize)} with no size given. */
+    @Transactional
+    public Scheduled declareEta(String vesselId, Instant eta, ReportedPosition position) {
+        return declareEta(vesselId, eta, position, null);
     }
 
     /**
-     * Record the model's ETA against the vessel's visit, then give the visit a
-     * berth or its place in the queue. Call the model before this method so the
-     * HTTP round trip stays outside the database transaction.
+     * The operator's estimated arrival at berth. Opens the visit if the vessel
+     * has none, then allocates a berth or a queue place; for a visit already
+     * open it replans. Either way the terminal answers with a requested
+     * arrival. A position given with the estimate is kept with it, and a size
+     * is recorded against the vessel and the call. A vessel that fits no berth
+     * here is refused, and no call is opened for it.
      */
     @Transactional
-    public Scheduled schedule(ScheduleRequest req, EtaResponse eta) {
+    public Scheduled declareEta(String vesselId, Instant eta, ReportedPosition position, VesselSize size) {
         Instant now = Instant.now();
-        Instant predictedArrival = now.plusSeconds(Math.round(eta.etaMinutes() * 60));
-
-        Vessel vessel = vesselRepository.findByCode(req.vesselId())
-                .orElseGet(() -> vesselRepository.save(new Vessel(req.vesselId())));
-        VesselVisit visit = visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED)
-                .orElseGet(() -> visitRepository.save(new VesselVisit(newVisitRef(now), vessel, VisitPhase.INBOUND)));
-        visit.setEtaBerth(predictedArrival);
-        if (req.vesselType() != null) {
-            vessel.setType(req.vesselType());
+        Vessel vessel = vesselRepository.findByCode(vesselId)
+                .orElseGet(() -> vesselRepository.save(new Vessel(vesselId)));
+        Optional<VesselVisit> open = visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED);
+        BigDecimal draft = open.map(VesselVisit::getArrivalDraftMeters).orElse(null);
+        if (size != null) {
+            if (size.lengthOverallMeters() != null) {
+                vessel.setLoaMeters(metres(size.lengthOverallMeters()));
+            }
+            if (size.beamMeters() != null) {
+                vessel.setBeamMeters(metres(size.beamMeters()));
+            }
+            if (size.draftMeters() != null) {
+                draft = metres(size.draftMeters());
+            }
         }
+        // checked before a call is opened, so a vessel that fits nowhere leaves no visit behind
+        berthService.refuseUnlessABerthFits(vessel, draft);
+        VesselVisit visit = open
+                .orElseGet(() -> visitRepository.save(new VesselVisit(newVisitRef(now), vessel, VisitPhase.INBOUND)));
+        visit.setArrivalDraftMeters(draft);
+        visit.setEtaBerth(eta);
         visit.setPlannedServiceMinutes((int) PlanningRules.typicalStay(vessel.getType()).toMinutes());
-
-        predictionRepository.save(EtaPrediction.builder()
-                .visit(visit)
-                .predictedAt(now)
-                .source(PredictionSource.ML_MODEL)
-                .modelName(etaModelName)
-                .lat(req.lat())
-                .lon(req.lon())
-                .sogKnots(req.sog())
-                .cogDegrees(req.cog())
-                .destLat(req.destLat())
-                .destLon(req.destLon())
-                .distanceNm(eta.distanceToDestNm())
-                .etaMinutes(eta.etaMinutes())
-                .naiveEtaMinutes(eta.naiveEtaMin())
-                .predictedArrival(predictedArrival)
-                .build());
         eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.ESTIMATED,
-                predictedArrival, now, EventSource.ML_MODEL, null));
-
-        BerthService.Assignment assignment = berthService.allocate(visit);
-
-        // Speed advice only when the berth will not be free by the time the vessel would arrive.
-        Instant requested = visit.getRtaBerth();
-        Double advisedSpeed = requested != null && requested.isAfter(predictedArrival)
-                ? PlanningRules.advisedSpeedKnots(eta.distanceToDestNm(), Duration.between(now, requested),
-                        req.sog(), PlanningRules.economicalSpeedKnots(vessel.getType()))
-                : null;
-        return new Scheduled(assignment, requested, advisedSpeed);
+                eta, now, EventSource.VESSEL, null));
+        if (position != null) {
+            predictionRepository.save(EtaPrediction.builder()
+                    .visit(visit)
+                    .predictedAt(now)
+                    .source(PredictionSource.VESSEL_DECLARED)
+                    .lat(position.lat())
+                    .lon(position.lon())
+                    .distanceNm(position.distanceNm())
+                    .etaMinutes(Duration.between(now, eta).toSeconds() / 60.0)
+                    .predictedArrival(eta)
+                    .build());
+        }
+        return new Scheduled(berthService.reschedule(visit), visit.getRtaBerth());
     }
 
     /**
@@ -136,31 +154,6 @@ public class VesselVisitService {
         return requested;
     }
 
-    /**
-     * The operator's own ETA at berth, as opposed to the model's. Opens the
-     * visit if the vessel has none, then allocates a berth or a queue place.
-     */
-    @Transactional
-    public Scheduled declareEta(String vesselId, Instant eta) {
-        Instant now = Instant.now();
-        Vessel vessel = vesselRepository.findByCode(vesselId)
-                .orElseGet(() -> vesselRepository.save(new Vessel(vesselId)));
-        VesselVisit visit = visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED)
-                .orElseGet(() -> visitRepository.save(new VesselVisit(newVisitRef(now), vessel, VisitPhase.INBOUND)));
-        visit.setEtaBerth(eta);
-        visit.setPlannedServiceMinutes((int) PlanningRules.typicalStay(vessel.getType()).toMinutes());
-        eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.ESTIMATED,
-                eta, now, EventSource.VESSEL, null));
-        return new Scheduled(berthService.reschedule(visit), visit.getRtaBerth(), null);
-    }
-
-    /** The operator rejects the requested arrival and states when the vessel can arrive instead. */
-    @Transactional
-    public Scheduled replan(String vesselId, Instant eta) {
-        openVisit(vesselId);
-        return declareEta(vesselId, eta);
-    }
-
     /** The vessel reports it is alongside. */
     @Transactional
     public void arrived(String vesselId, Instant at) {
@@ -175,7 +168,8 @@ public class VesselVisitService {
 
     /**
      * The terminal's own code for a vessel named by its international
-     * identifiers, creating the vessel record if it is not yet known.
+     * identifiers, creating the vessel record if it is not yet known. A type
+     * given for a vessel already on record is kept as its type.
      */
     @Transactional
     public String resolveVessel(String imoNumber, String mmsi, String name, VesselType type) {
@@ -190,6 +184,9 @@ public class VesselVisitService {
             known = vesselRepository.findByCode(name);
         }
         if (known.isPresent()) {
+            if (type != null) {
+                known.get().setType(type);
+            }
             return known.get().getCode();
         }
         String code = imoNumber != null ? "IMO" + imoNumber : mmsi != null ? "MMSI" + mmsi : name;
@@ -210,7 +207,31 @@ public class VesselVisitService {
     @Transactional
     public void omit(String vesselId) {
         VesselVisit visit = openVisit(vesselId);
+        visit.setCancelledBy(EventSource.VESSEL);
         visit.setRemarks("Omitted by the vessel operator");
+        berthService.cancel(visit);
+    }
+
+    /**
+     * The terminal cancels a call whose vessel has not arrived, for example
+     * when its requested arrival goes unanswered. A berth it held goes to the
+     * head of the queue. The vessel may announce itself again, which opens a
+     * new visit behind those already waiting.
+     */
+    @Transactional
+    public void cancelByTerminal(String visitRef, String reason) {
+        VesselVisit visit = visitRepository.findByVisitRefForView(visitRef)
+                .orElseThrow(() -> new VisitNotFoundException("No visit has the reference " + visitRef));
+        if (VisitPhase.CLOSED.contains(visit.getPhase())) {
+            throw new VisitConflictException("Visit " + visitRef + " is already over");
+        }
+        if (visit.getAtaBerth() != null) {
+            throw new VisitConflictException("The vessel is alongside; release its berth when it leaves");
+        }
+        visit.setCancelledBy(EventSource.TERMINAL);
+        visit.setRemarks(reason == null || reason.isBlank()
+                ? "Cancelled by the terminal"
+                : "Cancelled by the terminal: " + reason.strip());
         berthService.cancel(visit);
     }
 
@@ -220,8 +241,9 @@ public class VesselVisitService {
                 .orElseThrow(() -> new VisitNotFoundException("Vessel " + vesselId + " has no open visit"));
     }
 
-    /** The outcome of scheduling: berth or queue place, when to arrive, and at what speed if slower helps. */
-    public record Scheduled(BerthService.Assignment assignment, Instant requestedArrival, Double advisedSpeedKnots) {}
+    private static BigDecimal metres(double value) {
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
+    }
 
     private static String newVisitRef(Instant now) {
         return "VV-" + REF_DATE.format(now) + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();

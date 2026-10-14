@@ -2,7 +2,7 @@ package com.port.scheduler.service;
 
 import com.port.scheduler.model.EtaRequest;
 import com.port.scheduler.model.EtaResponse;
-import com.port.scheduler.model.ScheduleRequest;
+import com.port.scheduler.model.EtaQuery;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -31,7 +31,7 @@ public class EtaService {
                 .build();
     }
 
-    public EtaResponse predict(ScheduleRequest req) {
+    public EtaResponse predict(EtaQuery req) {
         EtaRequest body = new EtaRequest(
                 req.lat(), req.lon(), req.sog(), req.cog(),
                 req.destLat(), req.destLon());
