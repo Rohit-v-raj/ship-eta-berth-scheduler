@@ -256,7 +256,24 @@ class BerthSchedulingTest {
         assertThat(planned).isEqualTo(visit.getRtaBerth());
         assertThat(visit.getPtaBerth()).isEqualTo(visit.getRtaBerth());
         assertThat(events.findAll()).filteredOn(e -> e.getClassifier() == TimeClassifier.PLANNED)
-                .singleElement().satisfies(e -> assertThat(e.getSource()).isEqualTo(EventSource.VESSEL));
+                .singleElement().satisfies(e -> {
+                    assertThat(e.getSource()).isEqualTo(EventSource.VESSEL);
+                    // accepted at the berth the request named
+                    assertThat(e.getBerth()).isNotNull().isEqualTo(requestsTo("V001").getLast().getBerth());
+                });
+    }
+
+    @Test
+    void aWaitingVesselAcceptsATimeWithNoBerthYet() {
+        List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
+        Scheduled queued = scheduled("V005", null);
+
+        visitService.confirm("V005", queued.requestedArrival());
+
+        VesselVisit visit = visitOf("V005");
+        assertThat(visit.getPtaBerth()).isEqualTo(queued.requestedArrival());
+        assertThat(events.findLedger(visit)).filteredOn(e -> e.getClassifier() == TimeClassifier.PLANNED)
+                .singleElement().satisfies(e -> assertThat(e.getBerth()).isNull());
     }
 
     @Test

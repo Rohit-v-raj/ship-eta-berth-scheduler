@@ -179,7 +179,7 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-101 tests in nine classes: migrations and schema, the scheduling flow, the
+102 tests in nine classes: migrations and schema, the scheduling flow, the
 planning rules, the console's read views, DCSA publishing and receiving, and
 the JSON contract of each controller. The ones that touch the database need
 MySQL running (Phase 0.3) and use their own schema, `port_core_test`, which is

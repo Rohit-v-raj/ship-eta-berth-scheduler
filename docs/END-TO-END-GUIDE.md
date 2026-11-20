@@ -842,7 +842,7 @@ steps 9 to 11, in order:
  PLANNED    2026-10-15T07:47:03Z  by VESSEL                accepted
  REQUESTED  2026-10-15T05:47:06Z  by TERMINAL              "Berth expected free 2026-10-15T05:47:06Z": NORDVIK berthed early
  REQUESTED  2026-10-14T14:51:57Z  by TERMINAL  berth B1    promoted when NORDVIK left
- PLANNED    2026-10-14T14:51:57Z  by VESSEL                accepted again
+ PLANNED    2026-10-14T14:51:57Z  by VESSEL    berth B1    accepted again
  ESTIMATED  2026-10-14T16:51:57Z  by VESSEL                delayed two hours
  REQUESTED  2026-10-14T16:51:57Z  by TERMINAL  berth B1    the terminal follows
 ```
@@ -1176,7 +1176,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 101 tests in nine classes; needs MySQL, not FastAPI
+.\gradlew test          # 102 tests in nine classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |

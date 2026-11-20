@@ -130,7 +130,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 101 tests in nine classes (§10)
+    └── test/java/com/port/scheduler/        # 102 tests in nine classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -732,7 +732,7 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 101 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 102 tests):
 
 | Test class | What it proves |
 |---|---|

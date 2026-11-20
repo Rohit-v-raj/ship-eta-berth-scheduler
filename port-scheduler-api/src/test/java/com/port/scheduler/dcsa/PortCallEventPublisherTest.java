@@ -57,7 +57,10 @@ class PortCallEventPublisherTest {
 
         assertThat(publisher.find(filter(null, null, null, null, null, null)).events()).hasSize(5);
         assertThat(publisher.find(filter(null, null, null, "PLN", null, null)).events())
-                .singleElement().satisfies(e -> assertThat(e.vessel().vesselName()).isEqualTo("V001"));
+                .singleElement().satisfies(e -> {
+                    assertThat(e.vessel().vesselName()).isEqualTo("V001");
+                    assertThat(e.portCallService().serviceLocation().locationName()).isEqualTo("Berth 1");
+                });
         assertThat(publisher.find(filter(null, "V002", null, null, null, null)).events()).hasSize(2);
         assertThat(publisher.find(filter("NOFRO", null, "BERTH", null, null, null)).events()).hasSize(5);
         assertThat(publisher.find(filter("NLRTM", null, null, null, null, null)).events()).isEmpty();
