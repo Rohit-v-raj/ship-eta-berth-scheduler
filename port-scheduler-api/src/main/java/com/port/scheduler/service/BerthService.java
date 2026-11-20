@@ -169,6 +169,14 @@ public class BerthService {
         release(allocation.getBerth().getCode());
     }
 
+    /** The berth the visit is booked on or lies at, or null while it is only waiting. */
+    @Transactional(readOnly = true)
+    public Berth bookedBerth(VesselVisit visit) {
+        return allocationRepository.findByVisitAndStatusIn(visit, AllocationStatus.OPEN)
+                .map(BerthAllocation::getBerth)
+                .orElse(null);
+    }
+
     /**
      * Cancel a visit. Its berth, if it held one, goes back to the waiting
      * line; either way the vessels behind it move up.

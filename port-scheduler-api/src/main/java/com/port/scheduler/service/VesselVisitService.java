@@ -148,8 +148,9 @@ public class VesselVisitService {
         }
         if (!requested.equals(visit.getPtaBerth())) {
             visit.setPtaBerth(requested);
+            // a booked vessel accepts a time at its berth; a waiting one accepts a time only
             eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.PLANNED,
-                    requested, Instant.now(), EventSource.VESSEL, null));
+                    requested, Instant.now(), EventSource.VESSEL, berthService.bookedBerth(visit)));
         }
         return requested;
     }
