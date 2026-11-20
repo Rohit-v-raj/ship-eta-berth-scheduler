@@ -1074,6 +1074,123 @@ back to estimate and request again. This service applies the same rule with
 its own tolerance, 4 hours, because its ships report within the last day or
 two. Lateness is measured against the time the ship agreed, as there.
 
+### Step 20 — What a ship reports is checked against its call
+
+Each report from a ship has to fit the state of its call. SVANOY estimated an
+arrival three hours ago, reported it was alongside at that time, and then
+tries five things. The answers below were captured on 20 Nov 2026.
+
+```bash
+T0=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
+for C in EST ACT; do curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
+{"events":[{"vessel":{"vesselName":"SVANOY"},
+  "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
+  "timestamp":{"classifierCode":"$C","serviceDateTime":"$T0"}}]}
+EOF
+echo; done
+```
+
+Then, each sent the same way:
+
+| SVANOY sends | Answer (`ERROR` in `feedbackElements`) |
+|---|---|
+| an omitted call (`"portCall":{"isOmitted":true}`) | `Vessel SVANOY is alongside; report its departure instead of omitting the call` |
+| an `EST` arrival | `Vessel SVANOY is alongside; an estimated arrival no longer applies to this call` |
+| an `ACT` departure dated before its arrival | `The departure (2026-11-20T09:44:20Z) is before the arrival (2026-11-20T10:44:19Z)` |
+| an `ACT` departure three hours from now | `An actual departure cannot be in the future: 2026-11-20T16:44:20Z has not happened yet` |
+| an `ACT` departure an hour ago | `{}`: accepted |
+
+The ledger keeps the departure at the time the ship sent, as the ship's own
+report:
+
+```
+ DEPARTURE_BERTH  ACTUAL  2026-11-20T12:44:19Z  by VESSEL  B1   recorded 2026-11-20T13:44:20Z
+```
+
+A ship that never arrived cannot leave, and an arrival cannot be reported
+ahead of time. VIGRA, booked for an hour from now:
+
+| VIGRA sends | Answer |
+|---|---|
+| an `ACT` departure | `Vessel VIGRA has not arrived; a departure needs an arrival first` |
+| an `ACT` arrival five hours from now | `An actual arrival cannot be in the future: 2026-11-20T18:44:21Z has not happened yet` |
+
+An event for another port is refused, whether the port is named in `portCall`
+or in the service's location; an event that names no port is taken as meant
+here:
+
+```bash
+curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
+{"events":[{"portCall":{"UNLocationCode":"NLRTM"},"vessel":{"vesselName":"TANGEN"},
+  "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-11-20T15:44:21Z"}}]}
+EOF
+```
+```json
+{"feedbackElements":[{"severity":"ERROR","message":"This terminal is at NOFRO; the event is for NLRTM","propertyPath":"$.events[0]"}]}
+```
+
+No call is opened and no vessel record is left behind:
+`GET /api/visits?vessel=TANGEN&state=all` answers `[]`.
+
+**What to notice.**
+
+- An actual time may be up to 5 minutes ahead of the terminal's clock, to
+  allow for clocks that differ a little; more than that is refused.
+- The planner's *Release* (step 12) still records a departure at the moment
+  it is pressed, as the terminal's own report.
+- A ship that has accepted a time and then sends the same estimate again
+  keeps its acceptance: HELLE accepted `2026-11-21T09:44:22Z`, sent that
+  estimate again, and its ledger shows no new request. A request is re-sent
+  only when the time moves by 15 minutes or more, whether the ship holds a
+  berth or waits.
+
+### Step 21 — A call far ahead holds no berth yet
+
+FEDJE sends an estimate sixty days ahead, with every berth free:
+
+```bash
+curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
+{"events":[{"vessel":{"vesselName":"FEDJE"},
+  "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2027-01-19T13:44:23Z"}}]}
+EOF
+curl -s "$API/api/visits?vessel=FEDJE"
+```
+```json
+[{... "phase":"INBOUND","berth":null,"queueNumber":1,
+  "etaBerth":"2027-01-19T13:44:23Z","rtaBerth":"2027-01-19T13:44:23Z","ptaBerth":null, ...}]
+```
+
+And in its ledger:
+
+```
+ REQUESTED  2027-01-19T13:44:23Z  by TERMINAL   "A berth is given within 7 days of arrival"
+```
+
+SOLUND, due in two hours, is booked on `B3` at once. Three days before its
+arrival FEDJE sends a fresh estimate, and is booked:
+
+```json
+[{... "berth":{"berthCode":"B4","berthName":"Berth 4","status":"PLANNED", ...},
+  "etaBerth":"2026-11-23T13:44:24Z","rtaBerth":"2026-11-23T13:44:24Z", ...}]
+```
+
+**What to notice.**
+
+- A ship due more than 7 days ahead (`port.planning.booking-horizon-hours`,
+  168) is told when to come and keeps its place in line, but holds no berth,
+  so a call months away cannot block one. Before this rule, a ship 60 days out
+  held a free berth for all 60 days.
+- It is booked at the next change to the plan inside the horizon. Any event
+  causes one, and a ship is expected to send an estimate 72 hours out anyway.
+- FEDJE got `B4`, which was free, although the occupied berths would also have
+  been clear by then: of berths a ship could start on equally soon, the one
+  free first wins, so the ship is booked rather than left waiting.
+- A booked ship whose new estimate moves beyond the horizon gives its booking
+  up, with the remark "Berth B1 withdrawn: the new estimate is more than 7 days
+  away", and keeps its place.
+
 ## 7. What the service refuses, and how
 
 Worth running: a system is as clear in its refusals as in its answers.
@@ -1088,17 +1205,21 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `POST` a position that cannot be read, e.g. `"latitude":"north"` | `200`, `ERROR` for that event |
 | `POST` `{"events":[]}` or a body that is not JSON | `400`, `feedbackElements` |
 | `GET /api/visits/VV-NOT-THERE` | `404`, `{"statusCode":404,"message":"Visit not found: ..."}` |
-| `GET /api/visits?state=closed` (only `open` and `all` exist) | `400` |
+| `GET /api/visits?state=closed` (only `open` and `all` exist) | `400`, `state must be 'open' or 'all'` |
 | `PUT /api/visits/{visitRef}/cancel` for a ship alongside, or a visit already over | `409`, saying which |
 | `PUT /api/visits/VV-NOT-THERE/cancel` | `404` |
 | `POST` an estimate for a ship that fits no berth | `200`, `ERROR`: `No berth here takes …`, with its size and the largest berth's limits. No call is opened |
 | `POST` a size in a unit other than `MTR` or `FOT` | `200`, `ERROR`: `vesselSizeUnit must be MTR or FOT` |
 | `POST /api/port/berths/{code}/maintenance` over the berth's booking, or over another window | `409`, saying which |
-| `POST /api/port/berths/{code}/maintenance` ending before it starts, already over, or without `from` or `to` | `400` |
+| `POST /api/port/berths/{code}/maintenance` ending before it starts, already over, or without `from` or `to` | `400`, saying which: `to must be after from`, `the window must end in the future`, `from: must not be null` |
 | `DELETE /api/port/berths/{code}/maintenance/{id}` with an id that berth does not have | `404` |
-| `PUT /api/visits/{visitRef}/cancel` with a `reason` longer than 400 characters | `400` |
-| `GET /api/port/berth-plan` with `from` after `to`, or a malformed time | `400` |
-| `POST /api/operator/eta` with a negative speed or no `vesselId` | `400`, before the model is asked |
+| `PUT /api/visits/{visitRef}/cancel` with a `reason` longer than 400 characters | `400`, `reason: size must be between 0 and 400` |
+| `GET /api/port/berth-plan` with `from` after `to`, or a malformed time | `400`, `from must be before to` or `The value of 'from' could not be read` |
+| `POST /api/operator/eta` with a negative speed or no `vesselId` | `400`, before the model is asked, e.g. `vesselId: must not be blank` |
+| `POST /api/operator/eta` while the model service is down or does not answer | `503`, `The ETA model service is not answering; try again shortly`, at once if it is down and after 10 seconds if it is hung |
+| `POST` an omitted call, an estimate, or a departure the call's state does not allow | `200`, `ERROR`, saying why (step 20) |
+| `POST` an event naming another port | `200`, `ERROR`: `This terminal is at NOFRO; the event is for …` |
+| `POST` an IMO number that is not 7 digits, an MMSI that is not 9, or a name over 32 characters with neither | `200`, `ERROR` naming the field. No vessel record is created |
 | `POST /api/ships/schedule`, `GET /api/ships/berths`, `POST /api/operator/vessels/X/accept` | `404`. These routes were removed; section 13 says what replaced each |
 
 Two refusals in one request, to see that each is reported against its own
@@ -1168,6 +1289,8 @@ sent, so you can compare it with this guide.
 | Step 17 | **My vessel**: the calculator's optional *Ship's size* fields travel with the estimate. A visit's drawer shows the size, or "size unknown" |
 | Step 18 | **Harbour**: the *Berth maintenance* panel schedules and removes windows; the berth plan draws them hatched, and a berth under maintenance now says "maint. to …" |
 | Step 19 | **Stories**: *A ship falls behind*. The ledger in the visit drawer gives the reason |
+| Step 20 | **My vessel**: *Omit this call* and *Propose another time* are not offered once the ship is alongside, and *Report departure* only then; a refusal from the scheduler appears beside the button |
+| Step 21 | **Harbour**: a ship due more than 7 days ahead is listed as waiting with no berth; its visit's ledger says "A berth is given within 7 days of arrival" |
 | Steps 8 to 14 and 19, played for you | **Stories**, the bar at the bottom: *The port fills up*, *A quiet port*, *A change of plan*, *A ship goes quiet*, *A ship falls behind* |
 
 ---
@@ -1176,7 +1299,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 102 tests in nine classes; needs MySQL, not FastAPI
+.\gradlew test          # 116 tests in ten classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
@@ -1261,8 +1384,9 @@ not been run through DCSA's conformance tests.
 - **The lateness rule is tighter than DCSA's weekly stage.** DCSA replans when
   an agreed arrival slips by 12 hours or more, between 7 days and 48 hours
   before arrival; this service uses 4 hours throughout.
-- **An actual departure is timed by the service's clock**, not by the time in
-  the event.
+- **A booking horizon of 7 days is this service's own rule.** DCSA's weekly
+  berth planning starts 7 days out, so a ship due later keeps its place but is
+  given no berth until then.
 - **No authentication and no subscriber registration**, both of which the
   standard leaves to the implementer.
 - **The terminal does not push.** It publishes on `GET`; it does not `POST`

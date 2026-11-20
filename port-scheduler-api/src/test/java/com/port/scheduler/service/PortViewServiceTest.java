@@ -186,13 +186,13 @@ class PortViewServiceTest {
 
         assertThat(detail.visit().vessel().code()).isEqualTo("V001");
         assertThat(detail.reports()).hasSize(2);
-        // each estimate is answered: the berth is already held, so the request follows the new time
+        // the berth is already held and the time has not moved, so the second estimate brings no new
+        // request (one would undo an acceptance the vessel may already have sent)
         assertThat(detail.events()).extracting(EventView::classifier, EventView::source, EventView::berthCode)
                 .containsExactly(
                         tuple(TimeClassifier.ESTIMATED, EventSource.VESSEL, null),
                         tuple(TimeClassifier.REQUESTED, EventSource.TERMINAL, "B1"),
-                        tuple(TimeClassifier.ESTIMATED, EventSource.VESSEL, null),
-                        tuple(TimeClassifier.REQUESTED, EventSource.TERMINAL, "B1"));
+                        tuple(TimeClassifier.ESTIMATED, EventSource.VESSEL, null));
         assertThatThrownBy(() -> views.visit("VV-NOT-THERE")).isInstanceOf(VisitNotFoundException.class);
     }
 

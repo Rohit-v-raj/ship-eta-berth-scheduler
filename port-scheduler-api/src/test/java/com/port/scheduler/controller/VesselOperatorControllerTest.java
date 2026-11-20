@@ -2,6 +2,7 @@ package com.port.scheduler.controller;
 
 import com.port.scheduler.entity.vessel.VesselType;
 import com.port.scheduler.entity.visit.VisitPhase;
+import com.port.scheduler.exceptions.EtaServiceUnavailableException;
 import com.port.scheduler.model.EtaResponse;
 import com.port.scheduler.model.view.VisitView;
 import com.port.scheduler.model.view.VisitView.VesselView;
@@ -55,6 +56,17 @@ class VesselOperatorControllerTest {
                 .andExpect(jsonPath("$.estimatedArrival").exists())
                 .andExpect(jsonPath("$.requestedArrival").isEmpty())
                 .andExpect(jsonPath("$.advisedSpeedKnots").isEmpty());
+        verifyNoInteractions(vesselVisitService);
+    }
+
+    @Test
+    void aModelServiceThatIsDownOrHungIsA503ThatSaysSo() throws Exception {
+        given(etaService.predict(any())).willThrow(new EtaServiceUnavailableException(
+                "The ETA model service is not answering; try again shortly", new RuntimeException("timed out")));
+
+        mvc.perform(post("/api/operator/eta").contentType(MediaType.APPLICATION_JSON).content(POSITION))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("The ETA model service is not answering; try again shortly"));
         verifyNoInteractions(vesselVisitService);
     }
 

@@ -130,7 +130,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 102 tests in nine classes (§10)
+    └── test/java/com/port/scheduler/        # 116 tests in ten classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -154,6 +154,8 @@ server.port=8080
 
 # Base URL of the Python FastAPI ETA model service (Phase 2)
 eta.api.url=http://localhost:8000
+eta.api.connect-timeout-seconds=3
+eta.api.read-timeout-seconds=10
 # Secrets (Gemini API key, DB password) stay out of version control.
 spring.config.import=optional:file:./secrets.properties
 
@@ -181,7 +183,10 @@ Three things here are worth a second look:
   database server's own time zone.
 
 There is no berth count setting any more: the berths are rows in the `berth`
-table, seeded by the `V4` migration.
+table, seeded by the `V4` migration. The planning rules have their own
+settings, all under `port.planning.*` (§7c): the re-issue threshold (15 min),
+the answer window (60 min), the late tolerance (240 min), the estimate
+milestones (72, 48, 24 h) and the booking horizon (168 h).
 
 ---
 
@@ -282,14 +287,19 @@ This is the class that crosses the language boundary. Here it is in full:
 public class EtaService {
     private final RestClient restClient;
 
-    public EtaService(@Value("${eta.api.url}") String etaApiUrl) {
+    public EtaService(@Value("${eta.api.url}") String etaApiUrl,
+                      @Value("${eta.api.connect-timeout-seconds:3}") long connectTimeoutSeconds,
+                      @Value("${eta.api.read-timeout-seconds:10}") long readTimeoutSeconds) {
         // Force HTTP/1.1: the JDK HttpClient defaults to HTTP/2 and attempts an
         // h2c upgrade that uvicorn rejects, which drops the request body.
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(connectTimeoutSeconds))
                 .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(readTimeoutSeconds));
         this.restClient = RestClient.builder()
-                .requestFactory(new JdkClientHttpRequestFactory(httpClient))
+                .requestFactory(requestFactory)
                 .baseUrl(etaApiUrl)
                 .build();
     }
@@ -298,12 +308,16 @@ public class EtaService {
         EtaRequest body = new EtaRequest(
                 req.lat(), req.lon(), req.sog(), req.cog(),
                 req.destLat(), req.destLon());
-        return restClient.post()
-                .uri("/predict")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(body)
-                .retrieve()
-                .body(EtaResponse.class);
+        try {
+            return restClient.post()
+                    .uri("/predict")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(EtaResponse.class);
+        } catch (ResourceAccessException e) {
+            throw new EtaServiceUnavailableException("The ETA model service is not answering; try again shortly", e);
+        }
     }
 }
 ```
@@ -317,6 +331,11 @@ What's happening:
   (snake_case-ready), POSTs it to `/predict`, and parses the JSON reply straight
   into an `EtaResponse`. `.retrieve().body(EtaResponse.class)` does the whole
   send → receive → deserialize in one fluent chain.
+- **Both waits are limited.** Connecting may take 3 seconds and the answer 10.
+  A model service that is down or hung raises `ResourceAccessException`, which
+  becomes `EtaServiceUnavailableException` and a `503` with the message "The
+  ETA model service is not answering; try again shortly". Without the limits a
+  hung service held the calculator's request with no end.
 
 #### The HTTP/2 bug — what it was and why the fix works
 
@@ -503,9 +522,26 @@ Key ideas:
   and the berth goes to the head of the queue. Nothing is cancelled
   automatically.
 - **A second estimate from the same vessel replans its call.** A ship holding a
-  berth keeps it and the window moves; a waiting ship's request is re-issued
-  only if it moves by more than `port.planning.reissue-threshold-minutes`. A
+  berth keeps it and the window moves; either way its request is re-issued
+  only if it moves by at least `port.planning.reissue-threshold-minutes`, so
+  an estimate sent again unchanged does not undo the ship's acceptance. A
   vessel gets a new visit only after the previous one is over.
+- **A berth is booked only within the horizon.** A ship that can start more
+  than `port.planning.booking-horizon-hours` (168, seven days) ahead keeps its
+  place in line and is told its own estimate, with the remark "A berth is
+  given within 7 days of arrival", but holds no berth, so a far-off call
+  cannot block one. A booked ship whose new estimate moves beyond the horizon
+  gives its booking up. It is booked at the next replan inside the horizon;
+  any event triggers one, and the estimate expected 72 hours out is one.
+- **Of two berths equally soon, the one free first.** When a ship could start
+  as soon on an occupied berth as on a free one, it is placed on the free one,
+  and booked at once instead of being left waiting.
+- **What a ship reports is checked against its call.** A ship alongside cannot
+  omit its call or send a new estimated arrival; a departure needs an arrival,
+  may not be dated before it, and is recorded at the time the ship sent, as
+  the ship's own report; an actual time more than five minutes ahead of the
+  clock is refused. The planner's *Release* still records "now", as the
+  terminal.
 - **A position travels with the estimate.** The DCSA message has optional
   fields for where the ship is and how far it has to go. When they are given,
   they are stored against the visit (`eta_prediction`, source
@@ -598,6 +634,16 @@ because each event runs in its own transaction and one failure must not undo
 the rest. Services other than `BERTH` (pilotage, towage) are answered "not
 processed". Vessels are matched by IMO number, then MMSI, then name, and created
 if unknown.
+
+Before anything is looked up or stored, the receiver checks what it can from
+the event alone. An event naming another port (`portCall.UNLocationCode` or
+the service location's code) is refused with "This terminal is at NOFRO; the
+event is for ...". An event naming no port is taken as meant here. An IMO
+number must have 7 digits and an MMSI 9; a name used as the vessel's code
+(when neither is given) is at most 32 characters. A refused event therefore
+leaves no vessel record behind. A database error is reported to the sender as
+"The event could not be stored" and logged; the database's own message, which
+names tables and columns, is not sent.
 
 **`GET /events`** hands the query to `dcsa/PortCallEventPublisher`, which
 returns the visit ledger in the standard's shape, with its filters, cursor
@@ -732,17 +778,18 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 102 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 116 tests):
 
 | Test class | What it proves |
 |---|---|
 | `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a double-booked berth |
-| `BerthSchedulingTest` | Fill, queue, release, promote, accept, omit and replan; waiting ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind, and a late waiting ship skipped. All through the real services and a real database |
-| `PortCallEventReceiverTest` | Each DCSA event the operator can send, including a position, a stale acceptance and an omitted call |
+| `BerthSchedulingTest` | Fill, queue, release, promote, accept, omit and replan; waiting ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind, and a late waiting ship skipped; the booking horizon; reports checked against the call (omit or estimate while alongside, departure without or before arrival, actual times in the future, an estimate sent again). All through the real services and a real database |
+| `PortCallEventReceiverTest` | Each DCSA event the operator can send, including a position, a stale acceptance and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
 | `PortCallEventPublisherTest` | What the feed publishes, its filters and its cursor |
 | `PortViewServiceTest` | The console's views after real scheduling |
 | `PortCallEventsControllerTest`, `VesselOperatorControllerTest`, `ConsoleControllerTest` | The JSON each endpoint returns, including the `404` and `400` cases |
 | `PlanningRulesTest` | The stay and speed arithmetic |
+| `EtaServiceTest` | The model service client gives up in time when the service is down or accepts and never answers |
 
 The ones that touch the database need MySQL running. They use a separate
 schema, `port_core_test`, which is wiped and rebuilt on every run, and they
@@ -821,8 +868,6 @@ Closest first:
   and one list of permissions; `frontend-explained.md` §5 gives the rules the
   server has to enforce.
 - **Real agent tools** (§12).
-- **Resilience** — a timeout / fallback in `EtaService` so a slow or down model
-  service degrades gracefully instead of returning `500`.
 
 The rest of the terminal operating system is mapped but not built. Each row is a
 future set of entities and migrations:

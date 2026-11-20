@@ -132,7 +132,8 @@ class ConsoleControllerTest {
     @Test
     void anUnknownStateIsA400() throws Exception {
         mvc.perform(get("/api/visits").param("state", "closed"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("state must be 'open' or 'all'"));
         verifyNoInteractions(views);
     }
 
@@ -198,9 +199,11 @@ class ConsoleControllerTest {
     void aPeriodThatEndsBeforeItStartsOrAMalformedTimeIsA400() throws Exception {
         mvc.perform(get("/api/port/berth-plan")
                         .param("from", "2026-10-14T00:00:00Z").param("to", "2026-10-13T00:00:00Z"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("from must be before to"));
         mvc.perform(get("/api/port/berth-plan").param("from", "yesterday"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("The value of 'from' could not be read"));
         verify(views, never()).berthPlan(any(), any());
     }
 
@@ -263,7 +266,8 @@ class ConsoleControllerTest {
     void aReasonLongerThanTheVisitCanHoldIsA400() throws Exception {
         mvc.perform(put("/api/visits/VV-20261013-AB12CD34/cancel").contentType("application/json")
                         .content("{\"reason\":\"" + "x".repeat(401) + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("reason: size must be between 0 and 400"));
         verifyNoInteractions(visitService);
     }
 
@@ -295,13 +299,16 @@ class ConsoleControllerTest {
 
         mvc.perform(post("/api/port/berths/B1/maintenance").contentType("application/json")
                         .content("{\"from\":\"" + from + "\",\"to\":\"" + from.minus(Duration.ofHours(1)) + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("to must be after from"));
         mvc.perform(post("/api/port/berths/B1/maintenance").contentType("application/json")
                         .content("{\"from\":\"2026-01-01T00:00:00Z\",\"to\":\"2026-01-02T00:00:00Z\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("the window must end in the future"));
         mvc.perform(post("/api/port/berths/B1/maintenance").contentType("application/json")
                         .content("{\"to\":\"" + from + "\"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("from: must not be null"));
         mvc.perform(post("/api/port/berths/B1/maintenance").contentType("application/json")
                         .content("{\"from\":\"" + from + "\",\"to\":\"" + from.plus(Duration.ofHours(2)) + "\"}"))
                 .andExpect(status().isConflict())

@@ -42,6 +42,9 @@ public class VesselVisitService {
     private static final DateTimeFormatter REF_DATE =
             DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
 
+    /** How far ahead of our clock an actual time may be, to allow for clocks that differ a little. */
+    static final Duration ACTUAL_TIME_LEEWAY = Duration.ofMinutes(5);
+
     /**
      * Where a vessel said it was when it gave an estimate. Any part may be
      * missing: the DCSA message carries position and distance as optional.
@@ -87,7 +90,8 @@ public class VesselVisitService {
      * open it replans. Either way the terminal answers with a requested
      * arrival. A position given with the estimate is kept with it, and a size
      * is recorded against the vessel and the call. A vessel that fits no berth
-     * here is refused, and no call is opened for it.
+     * here is refused, and no call is opened for it. A vessel already alongside
+     * is refused too: an estimated arrival no longer applies to it.
      */
     @Transactional
     public Scheduled declareEta(String vesselId, Instant eta, ReportedPosition position, VesselSize size) {
@@ -95,6 +99,10 @@ public class VesselVisitService {
         Vessel vessel = vesselRepository.findByCode(vesselId)
                 .orElseGet(() -> vesselRepository.save(new Vessel(vesselId)));
         Optional<VesselVisit> open = visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED);
+        if (open.isPresent() && open.get().getAtaBerth() != null) {
+            throw new VisitConflictException("Vessel " + vesselId
+                    + " is alongside; an estimated arrival no longer applies to this call");
+        }
         BigDecimal draft = open.map(VesselVisit::getArrivalDraftMeters).orElse(null);
         if (size != null) {
             if (size.lengthOverallMeters() != null) {
@@ -155,25 +163,29 @@ public class VesselVisitService {
         return requested;
     }
 
-    /** The vessel reports it is alongside. */
+    /** The vessel reports it is alongside, at the time it gives. */
     @Transactional
     public void arrived(String vesselId, Instant at) {
+        notInTheFuture(at, "An actual arrival");
         berthService.arrive(openVisit(vesselId), at);
     }
 
-    /** The vessel reports it has left the berth. */
+    /** The vessel reports it has left the berth, at the time it gives. */
     @Transactional
-    public void departed(String vesselId) {
-        berthService.depart(openVisit(vesselId));
+    public void departed(String vesselId, Instant at) {
+        notInTheFuture(at, "An actual departure");
+        berthService.depart(openVisit(vesselId), at);
     }
 
     /**
      * The terminal's own code for a vessel named by its international
      * identifiers, creating the vessel record if it is not yet known. A type
-     * given for a vessel already on record is kept as its type.
+     * given for a vessel already on record is kept as its type. Identifiers
+     * in the wrong form are refused before anything is looked up or stored.
      */
     @Transactional
     public String resolveVessel(String imoNumber, String mmsi, String name, VesselType type) {
+        checkIdentifiers(imoNumber, mmsi, name);
         Optional<Vessel> known = Optional.empty();
         if (imoNumber != null) {
             known = vesselRepository.findByImoNumber(imoNumber);
@@ -204,10 +216,18 @@ public class VesselVisitService {
         return vesselRepository.save(vessel).getCode();
     }
 
-    /** The vessel operator skips this call. Its berth, if it held one, goes to the head of the queue. */
+    /**
+     * The vessel operator skips this call. Its berth, if it held one, goes to
+     * the head of the queue. A vessel already alongside cannot skip the call;
+     * it reports its departure instead.
+     */
     @Transactional
     public void omit(String vesselId) {
         VesselVisit visit = openVisit(vesselId);
+        if (visit.getAtaBerth() != null) {
+            throw new VisitConflictException("Vessel " + vesselId
+                    + " is alongside; report its departure instead of omitting the call");
+        }
         visit.setCancelledBy(EventSource.VESSEL);
         visit.setRemarks("Omitted by the vessel operator");
         berthService.cancel(visit);
@@ -240,6 +260,33 @@ public class VesselVisitService {
         return vesselRepository.findByCode(vesselId)
                 .flatMap(vessel -> visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED))
                 .orElseThrow(() -> new VisitNotFoundException("Vessel " + vesselId + " has no open visit"));
+    }
+
+    private static void notInTheFuture(Instant at, String what) {
+        if (at.isAfter(Instant.now().plus(ACTUAL_TIME_LEEWAY))) {
+            throw new IllegalArgumentException(what + " cannot be in the future: " + at + " has not happened yet");
+        }
+    }
+
+    /**
+     * IMO numbers have 7 digits and MMSIs 9. A name is at most 100 characters,
+     * and at most 32 when it becomes the vessel's code because no IMO number
+     * or MMSI is given.
+     */
+    private static void checkIdentifiers(String imoNumber, String mmsi, String name) {
+        if (imoNumber != null && !imoNumber.matches("\\d{7}")) {
+            throw new IllegalArgumentException("vesselIMONumber must be 7 digits");
+        }
+        if (mmsi != null && !mmsi.matches("\\d{9}")) {
+            throw new IllegalArgumentException("vesselMMSINumber must be 9 digits");
+        }
+        if (name != null && name.length() > 100) {
+            throw new IllegalArgumentException("vesselName can be at most 100 characters");
+        }
+        if (name != null && imoNumber == null && mmsi == null && name.length() > 32) {
+            throw new IllegalArgumentException(
+                    "vesselName can be at most 32 characters when no vesselIMONumber or vesselMMSINumber is given");
+        }
     }
 
     private static BigDecimal metres(double value) {
