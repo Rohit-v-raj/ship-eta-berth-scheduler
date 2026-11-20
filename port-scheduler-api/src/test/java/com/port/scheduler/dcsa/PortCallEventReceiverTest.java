@@ -72,18 +72,64 @@ class PortCallEventReceiverTest {
     }
 
     @Test
-    void actualArrivalAndDepartureMoveTheVesselOnAndOffItsBerth() {
-        receiver.receive(List.of(berth("ARRI", "EST", ETA)));
+    void actualArrivalAndDepartureMoveTheVesselOnAndOffItsBerthAtTheTimesSent() {
+        Instant arrived = Instant.now().minus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+        Instant left = arrived.plus(Duration.ofHours(2));
+        receiver.receive(List.of(berth("ARRI", "EST", arrived)));
         VesselVisit visit = visits.findAll().get(0);
 
-        assertThat(receiver.receive(List.of(berth("ARRI", "ACT", ETA)))).isEmpty();
+        assertThat(receiver.receive(List.of(berth("ARRI", "ACT", arrived)))).isEmpty();
         assertThat(visit.getPhase()).isEqualTo(VisitPhase.BERTHED);
-        assertThat(visit.getAtaBerth()).isEqualTo(ETA);
+        assertThat(visit.getAtaBerth()).isEqualTo(arrived);
         assertThat(holderOf("B1")).isEqualTo("IMO9321483");
 
-        assertThat(receiver.receive(List.of(berth("DEPA", "ACT", ETA.plus(Duration.ofHours(20)))))).isEmpty();
+        assertThat(receiver.receive(List.of(berth("DEPA", "ACT", left)))).isEmpty();
         assertThat(visit.getPhase()).isEqualTo(VisitPhase.DEPARTED);
+        assertThat(visit.getAtdBerth()).isEqualTo(left);
         assertThat(views.visits(null, false)).isEmpty();
+    }
+
+    @Test
+    void anEventForAnotherPortIsRefusedAndOneForThisPortOrNoneIsTakenAsMeantHere() {
+        Event calledElsewhere = new Event(null, null, null, new PortCall(null, null, "NLRTM", null), null,
+                new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), SHIP,
+                new Timestamp("EST", ETA, null));
+        Event locatedElsewhere = new Event(null, null, null, null, null,
+                new PortCallService(null, "BERTH", "ARRI", null, "BRTH", new Location("Berth 1", "NLRTM", null), null),
+                SHIP, new Timestamp("EST", ETA, null));
+
+        List<FeedbackElement> refused = receiver.receive(List.of(calledElsewhere, locatedElsewhere));
+
+        assertThat(refused).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
+                tuple("ERROR", "This terminal is at NOFRO; the event is for NLRTM"),
+                tuple("ERROR", "This terminal is at NOFRO; the event is for NLRTM"));
+        assertThat(visits.findAll()).isEmpty();
+        assertThat(vessels.findByImoNumber("9321483")).isEmpty(); // a refused event leaves no vessel behind
+
+        Event calledHere = new Event(null, null, null, new PortCall(null, null, "nofro", null), null,
+                new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), SHIP,
+                new Timestamp("EST", ETA, null));
+        assertThat(receiver.receive(List.of(calledHere))).isEmpty();
+        assertThat(visits.findAll()).hasSize(1);
+    }
+
+    @Test
+    void identifiersInTheWrongFormAreRefusedInPlainWordsAndLeaveNoRecord() {
+        long vesselsBefore = vessels.count();
+        List<FeedbackElement> feedback = receiver.receive(List.of(
+                estimateFor(named("12345678901", null, "Long Number")),
+                estimateFor(named("ABC1234", null, "Letters")),
+                estimateFor(named(null, "12345", "Short MMSI")),
+                estimateFor(named(null, null, "A".repeat(40))),
+                berth("ARRI", "REQ", ETA)));
+
+        assertThat(feedback).extracting(FeedbackElement::message).containsExactly(
+                "vesselIMONumber must be 7 digits",
+                "vesselIMONumber must be 7 digits",
+                "vesselMMSINumber must be 9 digits",
+                "vesselName can be at most 32 characters when no vesselIMONumber or vesselMMSINumber is given",
+                "A requested time at berth is issued by the terminal, not sent to it");
+        assertThat(vessels.count()).isEqualTo(vesselsBefore);
     }
 
     @Test
@@ -179,6 +225,11 @@ class PortCallEventReceiverTest {
         assertThat(feedback.get(0).message()).startsWith("No berth here takes").contains("length 300 m");
         assertThat(feedback.get(1).message()).isEqualTo("vesselSizeUnit must be MTR or FOT");
         assertThat(visits.findAll()).hasSize(1);
+    }
+
+    private static PortCallMessages.Vessel named(String imoNumber, String mmsi, String name) {
+        return new PortCallMessages.Vessel(imoNumber, mmsi, name, null, "CONT",
+                null, null, null, null, null, null, null, null);
     }
 
     private static Event estimateFor(PortCallMessages.Vessel vessel) {

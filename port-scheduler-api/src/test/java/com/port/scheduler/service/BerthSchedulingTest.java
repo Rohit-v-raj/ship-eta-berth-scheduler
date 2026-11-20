@@ -381,14 +381,15 @@ class BerthSchedulingTest {
     void aBerthsPlannedEndFollowsTheActualArrivalAndSoDoTheWaitingShips() {
         berthsComeFreeHoursApart();
         scheduledIn("V005", Duration.ofHours(1));
-        Instant late = Instant.now().plus(Duration.ofHours(4));   // two hours after V001's estimate
+        // an actual time cannot be in the future, so the arrival differs from the estimate by being early
+        Instant early = Instant.now().truncatedTo(ChronoUnit.SECONDS);   // two hours before V001's estimate
 
-        visitService.arrived("V001", late);
+        visitService.arrived("V001", early);
 
         BerthAllocation allocation = allocations.findAll().get(0);
         assertThat(allocation.getStatus()).isEqualTo(AllocationStatus.ACTIVE);
-        assertThat(allocation.getPlannedEnd()).isEqualTo(late.plus(STAY));
-        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(late.plus(STAY));
+        assertThat(allocation.getPlannedEnd()).isEqualTo(early.plus(STAY));
+        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(early.plus(STAY));
         assertThat(requestsTo("V005")).hasSize(2);
     }
 
@@ -425,6 +426,144 @@ class BerthSchedulingTest {
                 .isInstanceOf(VisitNotFoundException.class);
         assertThat(visitOf("V001").getPhase()).isEqualTo(VisitPhase.BERTHED);
         assertThat(visitOf("V002").getCancelledBy()).isEqualTo(EventSource.VESSEL);
+    }
+
+    // ---- events checked against the state of the call (gaps found by live testing, 2026-10-14)
+
+    @Test
+    void aVesselAlongsideCannotOmitItsCall() {
+        schedule("V001");
+        visitService.arrived("V001", Instant.now());
+
+        assertThatThrownBy(() -> visitService.omit("V001"))
+                .isInstanceOf(VisitConflictException.class).hasMessageContaining("is alongside");
+        assertThat(visitOf("V001").getPhase()).isEqualTo(VisitPhase.BERTHED);
+        assertThat(holderOf("B1")).isEqualTo("V001");
+        // so a ship that comes next is not booked onto the berth it lies at
+        schedule("V002");
+        assertThat(holderOf("B2")).isEqualTo("V002");
+    }
+
+    @Test
+    void aDepartureNeedsAnArrival() {
+        schedule("V001");
+
+        assertThatThrownBy(() -> visitService.departed("V001", Instant.now()))
+                .isInstanceOf(VisitConflictException.class).hasMessageContaining("has not arrived");
+        assertThat(visitOf("V001").getPhase()).isEqualTo(VisitPhase.INBOUND);
+        assertThat(holderOf("B1")).isEqualTo("V001");
+    }
+
+    @Test
+    void aDepartureKeepsTheTimeTheVesselSent() {
+        schedule("V001");
+        Instant arrivedAt = Instant.now().minus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+        Instant leftAt = arrivedAt.plus(Duration.ofHours(2));
+        visitService.arrived("V001", arrivedAt);
+
+        visitService.departed("V001", leftAt);
+
+        VesselVisit visit = visitOf("V001");
+        assertThat(visit.getAtdBerth()).isEqualTo(leftAt);
+        assertThat(events.findLedger(visit)).filteredOn(e -> e.getMilestone() == Milestone.DEPARTURE_BERTH)
+                .singleElement().satisfies(e -> {
+                    assertThat(e.getEventTime()).isEqualTo(leftAt);
+                    assertThat(e.getSource()).isEqualTo(EventSource.VESSEL);
+                    assertThat(e.getBerth().getCode()).isEqualTo("B1");
+                });
+        assertThat(holderOf("B1")).isNull();
+    }
+
+    @Test
+    void aDepartureBeforeTheArrivalIsRefused() {
+        schedule("V001");
+        Instant arrivedAt = Instant.now().minus(Duration.ofHours(1));
+        visitService.arrived("V001", arrivedAt);
+
+        assertThatThrownBy(() -> visitService.departed("V001", arrivedAt.minus(Duration.ofMinutes(30))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("before the arrival");
+        assertThat(holderOf("B1")).isEqualTo("V001");
+    }
+
+    @Test
+    void anActualTimeInTheFutureIsRefused() {
+        schedule("V001");
+        Instant later = Instant.now().plus(Duration.ofHours(5));
+
+        assertThatThrownBy(() -> visitService.arrived("V001", later))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot be in the future");
+        assertThat(visitOf("V001").getAtaBerth()).isNull();
+
+        visitService.arrived("V001", Instant.now().plus(Duration.ofMinutes(2))); // a clock a little ahead is fine
+        assertThatThrownBy(() -> visitService.departed("V001", later))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot be in the future");
+        assertThat(visitOf("V001").getPhase()).isEqualTo(VisitPhase.BERTHED);
+    }
+
+    @Test
+    void anEstimateFromAVesselAlongsideIsRefused() {
+        schedule("V001");
+        visitService.arrived("V001", Instant.now());
+        Instant eta = visitOf("V001").getEtaBerth();
+
+        assertThatThrownBy(() -> visitService.declareEta("V001", Instant.now().plus(Duration.ofHours(8)), POSITION))
+                .isInstanceOf(VisitConflictException.class).hasMessageContaining("is alongside");
+        assertThat(visitOf("V001").getEtaBerth()).isEqualTo(eta);
+    }
+
+    @Test
+    void aBookedVesselSendingItsEstimateAgainKeepsItsAcceptance() {
+        Instant eta = Instant.now().plus(SAILING).truncatedTo(ChronoUnit.SECONDS);
+        visitService.resolveVessel(null, null, "V001", null);
+        Scheduled booked = visitService.declareEta("V001", eta, POSITION);
+        visitService.confirm("V001", booked.requestedArrival());
+
+        visitService.declareEta("V001", eta, POSITION);                              // the same estimate again
+        visitService.declareEta("V001", eta.plus(Duration.ofMinutes(10)), POSITION); // and a small change
+
+        assertThat(visitOf("V001").getPtaBerth()).isEqualTo(booked.requestedArrival());
+        assertThat(requestsTo("V001")).hasSize(1);
+        assertThat(holderOf("B1")).isEqualTo("V001");
+
+        // a change of an hour is told to the vessel, which then has to accept again
+        visitService.declareEta("V001", eta.plus(Duration.ofHours(1)), POSITION);
+        assertThat(visitOf("V001").getPtaBerth()).isNull();
+        assertThat(requestsTo("V001")).hasSize(2);
+    }
+
+    // ---- booking horizon
+
+    @Test
+    void aVesselDueBeyondSevenDaysKeepsItsPlaceButHoldsNoBerthUntilItIsCloser() {
+        Scheduled far = scheduledIn("V001", Duration.ofDays(10));
+
+        assertThat(far.assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
+        assertThat(far.requestedArrival()).isCloseTo(Instant.now().plus(Duration.ofDays(10)), within(1, ChronoUnit.MINUTES));
+        assertThat(allocations.findByVisitAndStatusIn(visitOf("V001"), AllocationStatus.OPEN)).isEmpty();
+        assertThat(requestsTo("V001")).singleElement()
+                .satisfies(e -> assertThat(e.getRemarks()).isEqualTo("A berth is given within 7 days of arrival"));
+
+        // a ship due soon is booked at once: the far one blocks no berth
+        schedule("V002");
+        assertThat(holderOf("B1")).isEqualTo("V002");
+
+        // once its estimate is inside seven days it is booked, on a berth that is free, not the occupied one
+        Scheduled closer = scheduledIn("V001", Duration.ofDays(3));
+        assertThat(closer.assignment().status()).isEqualTo("BERTHED");
+        assertThat(closer.assignment().berthId()).isEqualTo("B2");
+    }
+
+    @Test
+    void aBookedVesselWhoseEstimateMovesBeyondSevenDaysGivesItsBerthUp() {
+        scheduledIn("V001", Duration.ofHours(2));
+        assertThat(holderOf("B1")).isEqualTo("V001");
+
+        Scheduled moved = scheduledIn("V001", Duration.ofDays(9));
+
+        assertThat(moved.assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
+        assertThat(holderOf("B1")).isNull();
+        assertThat(requestsTo("V001")).last().satisfies(e -> assertThat(e.getRemarks()).isEqualTo(
+                "Berth B1 withdrawn: the new estimate is more than 7 days away. A berth is given within 7 days of arrival"));
     }
 
     // ---- fit

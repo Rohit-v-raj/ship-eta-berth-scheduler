@@ -74,6 +74,7 @@ public class BerthService {
     private final VisitEventRepository eventRepository;
     private final Duration reissueThreshold;
     private final Duration lateTolerance;
+    private final Duration bookingHorizon;
 
     public BerthService(BerthRepository berthRepository,
                         BerthAllocationRepository allocationRepository,
@@ -81,9 +82,11 @@ public class BerthService {
                         VesselVisitRepository visitRepository,
                         VisitEventRepository eventRepository,
                         @Value("${port.planning.reissue-threshold-minutes:15}") long reissueThresholdMinutes,
-                        @Value("${port.planning.late-tolerance-minutes:240}") long lateToleranceMinutes) {
+                        @Value("${port.planning.late-tolerance-minutes:240}") long lateToleranceMinutes,
+                        @Value("${port.planning.booking-horizon-hours:168}") long bookingHorizonHours) {
         this.reissueThreshold = Duration.ofMinutes(reissueThresholdMinutes);
         this.lateTolerance = Duration.ofMinutes(lateToleranceMinutes);
+        this.bookingHorizon = Duration.ofHours(bookingHorizonHours);
         this.berthRepository = berthRepository;
         this.allocationRepository = allocationRepository;
         this.maintenanceRepository = maintenanceRepository;
@@ -116,8 +119,8 @@ public class BerthService {
     }
 
     /**
-     * Free a berth and pass it on to the waiting line. Returns true if the
-     * berth was occupied.
+     * The planner frees a berth now and passes it on to the waiting line.
+     * Returns true if the berth was occupied.
      */
     @Transactional
     public boolean release(String berthId) {
@@ -128,16 +131,7 @@ public class BerthService {
         if (open.isEmpty()) {
             return false; // already free
         }
-
-        Instant now = Instant.now();
-        BerthAllocation allocation = open.get();
-        allocation.complete(now);
-        VesselVisit visit = allocation.getVisit();
-        visit.depart(now);
-        eventRepository.save(VisitEvent.of(visit, Milestone.DEPARTURE_BERTH, TimeClassifier.ACTUAL,
-                now, now, EventSource.TERMINAL, berth));
-
-        replan(berths, Notes.none());
+        leave(open.get(), berths, Instant.now(), EventSource.TERMINAL);
         return true;
     }
 
@@ -161,12 +155,33 @@ public class BerthService {
         replan(berths, Notes.none());
     }
 
-    /** The vessel has left: its berth is released and passed on. */
+    /**
+     * The vessel reports it left its berth at the given time: the berth is
+     * released and passed on. Refused for a vessel that never arrived, and for
+     * a departure dated before its arrival.
+     */
     @Transactional
-    public void depart(VesselVisit visit) {
+    public void depart(VesselVisit visit, Instant at) {
+        List<Berth> berths = lockBerths();
         BerthAllocation allocation = allocationRepository.findByVisitAndStatusIn(visit, AllocationStatus.OPEN)
-                .orElseThrow(() -> new VisitConflictException("The vessel holds no berth to depart from"));
-        release(allocation.getBerth().getCode());
+                .filter(held -> held.getStatus() == AllocationStatus.ACTIVE)
+                .orElseThrow(() -> new VisitConflictException("Vessel " + visit.getVessel().getCode()
+                        + " has not arrived; a departure needs an arrival first"));
+        Instant arrived = allocation.getActualStart();
+        if (arrived != null && at.isBefore(arrived)) {
+            throw new IllegalArgumentException("The departure (" + at + ") is before the arrival (" + arrived + ")");
+        }
+        leave(allocation, berths, at, EventSource.VESSEL);
+    }
+
+    /** Close the allocation and the visit at the given time, record who said so, and replan. */
+    private void leave(BerthAllocation allocation, List<Berth> berths, Instant at, EventSource source) {
+        allocation.complete(at);
+        VesselVisit visit = allocation.getVisit();
+        visit.depart(at);
+        eventRepository.save(VisitEvent.of(visit, Milestone.DEPARTURE_BERTH, TimeClassifier.ACTUAL,
+                at, Instant.now(), source, allocation.getBerth()));
+        replan(berths, Notes.none());
     }
 
     /** The berth the visit is booked on or lies at, or null while it is only waiting. */
@@ -258,9 +273,12 @@ public class BerthService {
 
     /**
      * The booked vessel has a new estimate. Keep the booking at the new time,
-     * unless the vessel no longer fits the berth, or the new time is more than
-     * the tolerance after the agreed arrival and a waiting vessel can be
-     * alongside sooner. Then withdraw it, and say why in the ledger.
+     * unless the vessel no longer fits the berth, the new time is beyond the
+     * booking horizon, or it is more than the tolerance after the agreed
+     * arrival and a waiting vessel can be alongside sooner. Then withdraw it,
+     * and say why in the ledger. A booking kept at a new time is told to the
+     * vessel only when it moves by the re-issue threshold, so an estimate sent
+     * again unchanged does not undo the vessel's acceptance.
      */
     private void holdOrWithdraw(VesselVisit visit, BerthAllocation booking, Notes notes) {
         Instant now = Instant.now();
@@ -272,6 +290,14 @@ public class BerthService {
         }
         List<BerthMaintenance> windows = maintenanceRepository.findByBerthAndEndsAtAfterOrderByStartsAt(berth, now);
         Instant start = earliestStart(windows, later(now, visit.getEtaBerth()), stay(visit));
+        if (start.isAfter(now.plus(bookingHorizon))) {
+            booking.setStatus(AllocationStatus.CANCELLED);
+            notes.byVisit().put(visit.getId(), "Berth " + berth.getCode() + " withdrawn: the new estimate is more than "
+                    + span(bookingHorizon) + " away");
+            notes.byBerth().put(berth.getId(), "Given up by " + visit.getVessel().getCode()
+                    + ", whose new estimate is more than " + span(bookingHorizon) + " away");
+            return;
+        }
         Instant agreed = visit.getPtaBerth() != null ? visit.getPtaBerth() : visit.getRtaBerth();
         if (agreed != null && Duration.between(agreed, start).compareTo(lateTolerance) > 0
                 && waitingVesselGoesFirst(berth, visit, windows, now)) {
@@ -285,7 +311,10 @@ public class BerthService {
         }
         booking.setPlannedStart(start);
         booking.setPlannedEnd(start.plus(stay(visit)));
-        request(visit, start, berth, null);
+        Instant told = visit.getRtaBerth();
+        if (told == null || Duration.between(told, start).abs().compareTo(reissueThreshold) >= 0) {
+            request(visit, start, berth, null);
+        }
     }
 
     /** Whether the rule, run for this berth with the booked vessel back in line, gives the berth to another vessel. */
@@ -314,7 +343,9 @@ public class BerthService {
      * Work the waiting line out again after a change to the berth plan. Each
      * berth in service is available from its booking's planned end, or now if
      * it is free; the line is then placed by {@link #plan}. A vessel placed on
-     * a berth that is free now is booked on it at once. Every other waiting
+     * a berth that is free now is booked on it at once, if it can start there
+     * within the booking horizon; one due later keeps its place but holds no
+     * berth, so a far-off call does not block a berth. Every other waiting
      * vessel is told when to come: a new requested arrival is sent only if the
      * time moved by the re-issue threshold or more, and it cancels the
      * vessel's acceptance of the old one.
@@ -339,16 +370,21 @@ public class BerthService {
             available.put(berth.getId(), booking == null ? now : later(now, booking.getPlannedEnd()));
         }
 
+        Instant horizon = now.plus(bookingHorizon);
         Set<Long> bookedNow = new HashSet<>();
         for (Slot slot : plan(line, berths, available, maintenance, lateTolerance)) {
             VesselVisit visit = slot.visit();
             Berth berth = slot.berth();
             String note = notes.byVisit().get(visit.getId());
-            if (!held.containsKey(berth.getId()) && bookedNow.add(berth.getId())) {
+            // a vessel due beyond the horizon is told when to come but holds no berth yet
+            boolean withinHorizon = !slot.start().isAfter(horizon);
+            if (withinHorizon && !held.containsKey(berth.getId()) && bookedNow.add(berth.getId())) {
                 assign(visit, berth, slot.start(), notes.byBerth().getOrDefault(berth.getId(), note));
             } else {
-                String expected = "Berth expected free " + slot.berthFree();
-                request(visit, slot.start(), null, note == null ? expected : note + ". " + expected);
+                String why = withinHorizon
+                        ? "Berth expected free " + slot.berthFree()
+                        : "A berth is given within " + span(bookingHorizon) + " of arrival";
+                request(visit, slot.start(), null, note == null ? why : note + ". " + why);
             }
         }
     }
@@ -358,7 +394,8 @@ public class BerthService {
      * some waiting vessel can start soonest; it goes to the first vessel in
      * line that fits it and can start there within the tolerance of that
      * soonest time, so a vessel that is late is skipped but keeps its place;
-     * that vessel then takes whichever berth it can start on soonest.
+     * that vessel then takes whichever berth it can start on soonest, and of
+     * berths where it could start equally soon, the one free first.
      *
      * A vessel can start on a berth once the berth is available and the
      * vessel is there, with its whole stay clear of the berth's maintenance.
@@ -396,7 +433,10 @@ public class BerthService {
             for (Berth candidate : berths) {
                 if (BerthFit.fits(candidate, chosen)) {
                     Instant at = startOn(candidate, chosen, free, maintenance);
-                    if (at.isBefore(start)) {
+                    // on a tie, the berth free soonest, so a vessel is not left waiting for an occupied
+                    // berth while another that serves it as well is free
+                    if (at.isBefore(start)
+                            || (at.equals(start) && free.get(candidate.getId()).isBefore(free.get(best.getId())))) {
                         start = at;
                         best = candidate;
                     }
@@ -489,6 +529,16 @@ public class BerthService {
             return rest + " min";
         }
         return rest == 0 ? hours + " h" : hours + " h " + rest + " min";
+    }
+
+    /** A setting's length of time for a remark: "7 days" when it is whole days, otherwise as {@link #describe}. */
+    static String span(Duration duration) {
+        long hours = duration.toHours();
+        if (hours > 0 && hours % 24 == 0 && duration.toMinutesPart() == 0) {
+            long days = hours / 24;
+            return days == 1 ? "1 day" : days + " days";
+        }
+        return describe(duration);
     }
 
     private static Assignment berthed(Berth berth) {

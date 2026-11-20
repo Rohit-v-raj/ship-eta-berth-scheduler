@@ -6,11 +6,17 @@ import com.port.scheduler.dcsa.PortCallMessages.GeoCoordinate;
 import com.port.scheduler.dcsa.PortCallMessages.PortCallService;
 import com.port.scheduler.dcsa.PortCallMessages.Timestamp;
 import com.port.scheduler.dcsa.PortCallMessages.Vessel;
+import com.port.scheduler.entity.topology.Port;
 import com.port.scheduler.entity.vessel.VesselType;
+import com.port.scheduler.repository.PortRepository;
 import com.port.scheduler.service.VesselVisitService;
 import com.port.scheduler.service.VesselVisitService.ReportedPosition;
 import com.port.scheduler.service.VesselVisitService.VesselSize;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,28 +29,37 @@ import java.util.List;
  * confirms that request, an actual arrival or departure moves the vessel on
  * and off its berth, and an omitted call is cancelled. Each event is applied
  * in its own transaction, so one that fails does not undo the others; what
- * went wrong is reported per event, as the standard specifies.
+ * went wrong is reported per event, as the standard specifies. An event for
+ * another port is refused.
  */
 @Service
 public class PortCallEventReceiver {
 
+    private static final Logger log = LoggerFactory.getLogger(PortCallEventReceiver.class);
     private static final double FEET_TO_METRES = 0.3048;
 
     private final VesselVisitService visits;
+    private final PortRepository portRepository;
 
-    public PortCallEventReceiver(VesselVisitService visits) {
+    public PortCallEventReceiver(VesselVisitService visits, PortRepository portRepository) {
         this.visits = visits;
+        this.portRepository = portRepository;
     }
 
     public List<FeedbackElement> receive(List<Event> events) {
+        String here = portRepository.findAll().stream().findFirst().map(Port::getUnLocode).orElse(null);
         List<FeedbackElement> feedback = new ArrayList<>();
         for (int i = 0; i < events.size(); i++) {
             String path = "$.events[" + i + "]";
             try {
-                String note = apply(events.get(i));
+                String note = apply(events.get(i), here);
                 if (note != null) {
                     feedback.add(new FeedbackElement("WARN", note, path));
                 }
+            } catch (DataAccessException | TransactionException e) {
+                // the database's own message names tables and columns; the sender gets a plain one
+                log.warn("DCSA event {} could not be stored", path, e);
+                feedback.add(new FeedbackElement("ERROR", "The event could not be stored", path));
             } catch (RuntimeException e) {
                 feedback.add(new FeedbackElement("ERROR", e.getMessage(), path));
             }
@@ -52,17 +67,21 @@ public class PortCallEventReceiver {
         return feedback;
     }
 
-    /** Applies one event. Returns a note when the event was understood but deliberately not acted on. */
-    private String apply(Event event) {
+    /**
+     * Applies one event. Returns a note when the event was understood but
+     * deliberately not acted on. Everything that can be checked from the event
+     * alone is checked before the vessel is looked up, so a refused event
+     * leaves no vessel record behind.
+     */
+    private String apply(Event event, String here) {
         if (event == null || event.vessel() == null) {
             throw new IllegalArgumentException("An event needs a vessel");
         }
+        checkPort(event, here);
         Vessel vessel = event.vessel();
-        String vesselId = visits.resolveVessel(vessel.vesselIMONumber(), vessel.vesselMMSINumber(),
-                vessel.vesselName(), type(vessel.vesselTypeCode()));
 
         if (omitted(event)) {
-            visits.omit(vesselId);
+            visits.omit(vesselId(vessel));
             return null;
         }
         PortCallService service = event.portCallService();
@@ -81,19 +100,21 @@ public class PortCallEventReceiver {
                 if (!arrival) {
                     return "Not processed: an estimated departure is addressed to the port authority";
                 }
-                visits.declareEta(vesselId, timestamp.serviceDateTime(), position(vessel), size(vessel));
+                ReportedPosition position = position(vessel);
+                VesselSize size = size(vessel);
+                visits.declareEta(vesselId(vessel), timestamp.serviceDateTime(), position, size);
             }
             case "PLN" -> {
                 if (!arrival) {
                     return "Not processed: a planned departure is addressed to the port authority";
                 }
-                visits.confirm(vesselId, timestamp.serviceDateTime());
+                visits.confirm(vesselId(vessel), timestamp.serviceDateTime());
             }
             case "ACT" -> {
                 if (arrival) {
-                    visits.arrived(vesselId, timestamp.serviceDateTime());
+                    visits.arrived(vesselId(vessel), timestamp.serviceDateTime());
                 } else {
-                    visits.departed(vesselId);
+                    visits.departed(vesselId(vessel), timestamp.serviceDateTime());
                 }
             }
             case "REQ" -> throw new IllegalArgumentException(
@@ -102,6 +123,32 @@ public class PortCallEventReceiver {
                     "Unknown classifierCode '" + timestamp.classifierCode() + "'; use EST, PLN or ACT");
         }
         return null;
+    }
+
+    /** The terminal's code for the vessel the event names, created on first sight. */
+    private String vesselId(Vessel vessel) {
+        return visits.resolveVessel(vessel.vesselIMONumber(), vessel.vesselMMSINumber(),
+                vessel.vesselName(), type(vessel.vesselTypeCode()));
+    }
+
+    /**
+     * An event that names a port, in {@code portCall} or in the service's
+     * location, must name this one. An event that names none is taken as
+     * meant for this terminal.
+     */
+    private static void checkPort(Event event, String here) {
+        if (here == null) {
+            return;
+        }
+        String called = event.portCall() == null ? null : event.portCall().unLocationCode();
+        PortCallService service = event.portCallService();
+        String located = service == null || service.serviceLocation() == null
+                ? null : service.serviceLocation().unLocationCode();
+        for (String code : new String[] {called, located}) {
+            if (code != null && !code.equalsIgnoreCase(here)) {
+                throw new IllegalArgumentException("This terminal is at " + here + "; the event is for " + code);
+            }
+        }
     }
 
     /**

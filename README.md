@@ -101,6 +101,13 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
   only a berth its length, beam and draft fit, and is turned away if it fits
   none. Berth maintenance is recorded in advance; no ship is given a berth for
   a stay that would run into it.
+- **A berth is booked within seven days of arrival.** A ship due later keeps
+  its place in line and is told when to come, but holds no berth, so a call
+  months away cannot block one.
+- **What a ship reports is checked against its call.** A ship alongside cannot
+  omit its call or send a new estimated arrival; a departure needs an arrival
+  and keeps the time the ship sent; times in the future, events for another
+  port and malformed identifiers are refused with a plain reason.
 - **Speed is the ship's sum.** The terminal sends a time, as the standard
   says, and never a speed. The operator's calculator runs the ETA model and
   works out the speed that meets the requested time, never below an economical
@@ -227,8 +234,9 @@ Four controllers, one per flow.
 - **The terminal keeps no model predictions.** The calculator stores nothing,
   and the terminal knows a ship's position only when an estimate carries one.
   Checking the model against real arrivals needs a position feed of its own.
-- **The queue never reorders.** A berth can stand empty for a ship delayed by
-  weather while a nearer one waits.
+- **The plan is a rule, not an optimiser.** Ships are placed first come, first
+  served, with a 4-hour tolerance for lateness; nothing searches for the best
+  plan overall.
 - **Waiting times follow events, not the clock.** A waiting ship's requested
   time is worked out again whenever something happens to the berth plan. A
   berthed ship that simply overstays changes nothing until the next event.
