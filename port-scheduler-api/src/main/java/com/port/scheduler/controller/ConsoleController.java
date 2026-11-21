@@ -35,7 +35,8 @@ import java.util.Map;
  * its berths, the visits in progress, one visit's history, the berth plan and
  * the maintenance planned (all read-only), and the planner's actions on the
  * terminal's own berths: releasing a berth whose vessel has left, cancelling a
- * call whose vessel has not arrived, and planning maintenance.
+ * call whose vessel has not arrived, setting when a vessel alongside is
+ * expected to leave, and planning maintenance.
  */
 @RestController
 @RequestMapping("/api")
@@ -154,5 +155,24 @@ public class ConsoleController {
                                       @Valid @RequestBody(required = false) CancelRequest request) {
         visits.cancelByTerminal(visitRef, request == null ? null : request.reason());
         return Map.of("visitRef", visitRef, "cancelled", true);
+    }
+
+    /** When the planner expects a vessel alongside to have finished and left, and optionally why. */
+    public record ExpectedCompletionRequest(@NotNull Instant at, @Size(max = 200) String reason) {}
+
+    /**
+     * The planner's expected departure for a vessel alongside (the terminal's
+     * estimated completion of cargo operations). Its berth's planned end moves
+     * there, and waiting vessels are given new times from it. Refused with
+     * {@code 409} for a vessel not alongside.
+     */
+    @PutMapping("/visits/{visitRef}/expected-completion")
+    public Map<String, Object> expectCompletion(@PathVariable String visitRef,
+                                                @Valid @RequestBody ExpectedCompletionRequest request) {
+        if (!request.at().isAfter(Instant.now())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "the expected departure must be in the future");
+        }
+        visits.expectCompletion(visitRef, request.at(), request.reason());
+        return Map.of("visitRef", visitRef, "expectedCompletion", request.at());
     }
 }

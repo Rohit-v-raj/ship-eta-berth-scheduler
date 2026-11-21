@@ -130,7 +130,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 116 tests in ten classes (§10)
+    └── test/java/com/port/scheduler/        # 123 tests in eleven classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -186,7 +186,8 @@ There is no berth count setting any more: the berths are rows in the `berth`
 table, seeded by the `V4` migration. The planning rules have their own
 settings, all under `port.planning.*` (§7c): the re-issue threshold (15 min),
 the answer window (60 min), the late tolerance (240 min), the estimate
-milestones (72, 48, 24 h) and the booking horizon (168 h).
+milestones (72, 48, 24 h), the booking horizon (168 h), the overstay step
+(60 min) and the turnaround between ships (60 min).
 
 ---
 
@@ -513,6 +514,21 @@ Key ideas:
   planned end to the arrival plus the stay, so a ship that berths early or
   late changes when its berth comes free, and with it the waiting ships'
   times.
+- **A ship that stays longer keeps its berth.** The planned end is a typical
+  stay, so about half of all ships run past it. A ship still alongside after
+  its planned end, with no word, is taken to leave one step from now
+  (`port.planning.overstay-step-minutes`, 60) rather than to have gone; the
+  view flags it (`VisitView.overstayingSince`). The planner, who knows the
+  cargo left, sets when it is expected to leave: `expectCompletion` moves the
+  planned end, records the terminal's estimated completion of cargo
+  operations in the ledger (`CARGO_OPS_COMPLETE`, `ESTIMATED`, published as
+  `CARGO_OPERATIONS` `CMPL` `EST`), and replans. Refused for a ship not
+  alongside or a time already past.
+- **An hour between ships.** A berth is free for the next ship
+  `port.planning.berth-turnaround-minutes` (60) after the last one leaves, or
+  after the planned end of the one before it in the plan: unmooring, mooring
+  and clearance. The remark "Berth expected free" names when the ship before
+  is expected to leave; the requested time is the turnaround after it.
 - **A berth is reserved when the terminal answers, not when the ship
   accepts.** A slow reply therefore cannot lose the berth to another ship. The
   cost is the opposite case: a ship that never replies holds it. The terminal
@@ -690,12 +706,13 @@ conversation only when the operator sends it as an `EST` event.
 | `GET /api/port/berth-plan` | Berth windows over a period (`?from=&to=`) |
 | `PUT /api/port/berths/{berthCode}/release` | Free a berth: the ship is recorded as departed and the berth goes to the head of the queue |
 | `PUT /api/visits/{visitRef}/cancel` | Cancel the call of a ship that has not arrived. A berth it held goes to the head of the queue. An optional `{"reason": "..."}` is kept with the visit |
+| `PUT /api/visits/{visitRef}/expected-completion` | When a ship alongside is expected to leave (`{"at", "reason"}`); the berth's planned end moves there and waiting ships are re-timed. `400` for a time already past, `409` for a ship not alongside |
 | `GET /api/port/maintenance` | Maintenance windows not yet over, on every berth |
 | `POST /api/port/berths/{berthCode}/maintenance` | Plan maintenance (`{"from", "to", "reason"}`); `201`, or `409` over a booking or another window, `400` for times that make no sense |
 | `DELETE /api/port/berths/{berthCode}/maintenance/{id}` | Remove a window; `404` if the berth has none with that id |
 
-The four reads go through `PortViewService` and store nothing. The planner
-has two actions, one for each side of an arrival:
+The four reads go through `PortViewService` and store nothing. The planner's
+actions on a call:
 
 - **`release`**, for a ship that was alongside. A ship's own `ACT` departure
   does the same thing; this is for when the ship's side never reports it.
@@ -706,6 +723,7 @@ has two actions, one for each side of an arrival:
 - **`cancel`**, for a ship that has not arrived, typically one that never
   answered the requested arrival. It is refused with `409` for a ship
   alongside or a visit already over, and with `404` for an unknown reference.
+- **`expectCompletion`**, for a ship alongside: when it is expected to leave.
 
 The annotations, decoded:
 - **`@RestController`** — this class handles HTTP and returns data (Spring turns the
@@ -778,7 +796,7 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 116 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 123 tests):
 
 | Test class | What it proves |
 |---|---|
@@ -790,6 +808,7 @@ The same behaviour is covered by automated tests (`.\gradlew test`, 116 tests):
 | `PortCallEventsControllerTest`, `VesselOperatorControllerTest`, `ConsoleControllerTest` | The JSON each endpoint returns, including the `404` and `400` cases |
 | `PlanningRulesTest` | The stay and speed arithmetic |
 | `EtaServiceTest` | The model service client gives up in time when the service is down or accepts and never answers |
+| `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production (the other scheduling tests run without it so their times stay plain sums) |
 
 The ones that touch the database need MySQL running. They use a separate
 schema, `port_core_test`, which is wiped and rebuilt on every run, and they
@@ -852,9 +871,13 @@ Closest first:
 - **Fix the ETA label** — the model's training target counts time spent stopped
   near the berth as sailing, so its estimates run late close to port.
 - **Let time itself change the plan** — waiting ships' times are worked out
-  again when something happens, not when time passes. A berthed ship that
-  overstays its planned end triggers nothing until the next event, and an
-  overdue answer is flagged only on a screen someone is looking at.
+  again when something happens, not when time passes. A ship that overstays
+  is flagged on read, but the ships behind it are re-timed only at the next
+  event or when the planner sets its expected departure, and an overdue
+  answer is flagged only on a screen someone is looking at.
+- **Stays from the work** — forecast a ship's completion from the moves left
+  and the cranes on it, as a terminal operating system does, instead of a
+  median stay and the planner's estimate.
 - **Run the ETA model inside this service** — load the model in Java (ONNX
   Runtime, or XGBoost4J if conversion fails) so no separate Python service is
   needed to predict. The feature maths moves too, guarded by a parity test

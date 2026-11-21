@@ -63,4 +63,7 @@ export const handlers = [
   http.put('/api/visits/:visitRef/cancel', ({ params }) =>
     HttpResponse.json({ visitRef: params.visitRef, cancelled: true }),
   ),
+  http.put('/api/visits/:visitRef/expected-completion', async ({ params, request }) =>
+    HttpResponse.json({ visitRef: params.visitRef, expectedCompletion: (await request.json()).at }),
+  ),
 ]

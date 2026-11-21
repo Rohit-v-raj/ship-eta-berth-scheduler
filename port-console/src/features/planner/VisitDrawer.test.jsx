@@ -76,6 +76,30 @@ describe('VisitDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Cancel this call' })).not.toBeInTheDocument()
   })
 
+  it('flags a ship past its planned end and saves an expected departure for it', async () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString()
+    const overstaying = { ...alongside, overstayingSince: twoHoursAgo, berth: { ...alongside.berth, plannedEnd: twoHoursAgo } }
+    serve(overstaying)
+    const sent = []
+    server.use(
+      http.put('/api/visits/:visitRef/expected-completion', async ({ request, params }) => {
+        sent.push({ visitRef: params.visitRef, body: await request.json() })
+        return HttpResponse.json({ visitRef: params.visitRef, expectedCompletion: sent.at(-1).body.at })
+      }),
+    )
+    renderWithApp(<VisitDrawer visitRef={overstaying.visitRef} onClose={() => {}} />)
+
+    expect(await screen.findByText('Overstaying, 2 h past planned end')).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('Reason (optional)'), 'Crane breakdown')
+    await userEvent.click(screen.getByRole('button', { name: 'Save expected departure' }))
+
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].visitRef).toBe(overstaying.visitRef)
+    expect(sent[0].body.reason).toBe('Crane breakdown')
+    // the planned end has passed, so the form starts two hours from the next full hour: in the future
+    expect(new Date(sent[0].body.at).getTime()).toBeGreaterThan(Date.now())
+  })
+
   it('offers the operator seat neither action', async () => {
     serve(waiting)
     renderWithApp(<VisitDrawer visitRef={waiting.visitRef} onClose={() => {}} />, { role: ROLES.OPERATOR })

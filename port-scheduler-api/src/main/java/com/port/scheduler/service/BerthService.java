@@ -75,6 +75,8 @@ public class BerthService {
     private final Duration reissueThreshold;
     private final Duration lateTolerance;
     private final Duration bookingHorizon;
+    private final Duration overstayStep;
+    private final Duration turnaround;
 
     public BerthService(BerthRepository berthRepository,
                         BerthAllocationRepository allocationRepository,
@@ -83,10 +85,14 @@ public class BerthService {
                         VisitEventRepository eventRepository,
                         @Value("${port.planning.reissue-threshold-minutes:15}") long reissueThresholdMinutes,
                         @Value("${port.planning.late-tolerance-minutes:240}") long lateToleranceMinutes,
-                        @Value("${port.planning.booking-horizon-hours:168}") long bookingHorizonHours) {
+                        @Value("${port.planning.booking-horizon-hours:168}") long bookingHorizonHours,
+                        @Value("${port.planning.overstay-step-minutes:60}") long overstayStepMinutes,
+                        @Value("${port.planning.berth-turnaround-minutes:60}") long turnaroundMinutes) {
         this.reissueThreshold = Duration.ofMinutes(reissueThresholdMinutes);
         this.lateTolerance = Duration.ofMinutes(lateToleranceMinutes);
         this.bookingHorizon = Duration.ofHours(bookingHorizonHours);
+        this.overstayStep = Duration.ofMinutes(overstayStepMinutes);
+        this.turnaround = Duration.ofMinutes(turnaroundMinutes);
         this.berthRepository = berthRepository;
         this.allocationRepository = allocationRepository;
         this.maintenanceRepository = maintenanceRepository;
@@ -181,6 +187,29 @@ public class BerthService {
         visit.depart(at);
         eventRepository.save(VisitEvent.of(visit, Milestone.DEPARTURE_BERTH, TimeClassifier.ACTUAL,
                 at, Instant.now(), source, allocation.getBerth()));
+        replan(berths, Notes.none());
+    }
+
+    /**
+     * The planner's estimate of when a vessel alongside will have finished and
+     * left (IMO's ETC, cargo): the berth's planned end moves to it, the ledger
+     * records it as the terminal's estimated completion of cargo operations,
+     * and the waiting line is placed again. Refused for a vessel not alongside
+     * and for a time already past.
+     */
+    @Transactional
+    public void expectCompletion(VesselVisit visit, Instant at, String remark) {
+        List<Berth> berths = lockBerths();
+        BerthAllocation allocation = allocationRepository.findByVisitAndStatusIn(visit, AllocationStatus.OPEN)
+                .filter(held -> held.getStatus() == AllocationStatus.ACTIVE)
+                .orElseThrow(() -> new VisitConflictException("Vessel " + visit.getVessel().getCode()
+                        + " is not alongside; an expected departure is set for a vessel at its berth"));
+        if (!at.isAfter(Instant.now())) {
+            throw new IllegalArgumentException("The expected departure must be in the future");
+        }
+        allocation.setPlannedEnd(at);
+        eventRepository.save(VisitEvent.of(visit, Milestone.CARGO_OPS_COMPLETE, TimeClassifier.ESTIMATED,
+                at, Instant.now(), EventSource.TERMINAL, allocation.getBerth(), remark));
         replan(berths, Notes.none());
     }
 
@@ -289,7 +318,8 @@ public class BerthService {
             return;
         }
         List<BerthMaintenance> windows = maintenanceRepository.findByBerthAndEndsAtAfterOrderByStartsAt(berth, now);
-        Instant start = earliestStart(windows, later(now, visit.getEtaBerth()), stay(visit));
+        Instant berthFree = freeAfter(lastDepartures().get(berth.getId()), now);
+        Instant start = earliestStart(windows, later(berthFree, visit.getEtaBerth()), stay(visit));
         if (start.isAfter(now.plus(bookingHorizon))) {
             booking.setStatus(AllocationStatus.CANCELLED);
             notes.byVisit().put(visit.getId(), "Berth " + berth.getCode() + " withdrawn: the new estimate is more than "
@@ -300,7 +330,7 @@ public class BerthService {
         }
         Instant agreed = visit.getPtaBerth() != null ? visit.getPtaBerth() : visit.getRtaBerth();
         if (agreed != null && Duration.between(agreed, start).compareTo(lateTolerance) > 0
-                && waitingVesselGoesFirst(berth, visit, windows, now)) {
+                && waitingVesselGoesFirst(berth, visit, windows, berthFree)) {
             String late = describe(Duration.between(agreed, start));
             booking.setStatus(AllocationStatus.CANCELLED);
             notes.byVisit().put(visit.getId(), "Berth " + berth.getCode() + " withdrawn: this estimate is " + late
@@ -319,7 +349,7 @@ public class BerthService {
 
     /** Whether the rule, run for this berth with the booked vessel back in line, gives the berth to another vessel. */
     private boolean waitingVesselGoesFirst(Berth berth, VesselVisit booked, List<BerthMaintenance> windows,
-                                           Instant now) {
+                                           Instant berthFree) {
         List<Long> queue = new ArrayList<>(visitRepository.findWaitingIds(VisitPhase.CLOSED, AllocationStatus.OPEN));
         if (queue.isEmpty()) {
             return false;
@@ -328,7 +358,7 @@ public class BerthService {
         Collections.sort(queue); // in line by when each call was opened
         Map<Long, VesselVisit> byId = visitRepository.findAllById(queue).stream()
                 .collect(Collectors.toMap(VesselVisit::getId, Function.identity()));
-        Map<Long, Instant> free = Map.of(berth.getId(), now);
+        Map<Long, Instant> free = Map.of(berth.getId(), berthFree);
         Map<Long, List<BerthMaintenance>> maintenance = Map.of(berth.getId(), windows);
         List<VesselVisit> line = queue.stream().map(byId::get).filter(v -> BerthFit.fits(berth, v)).toList();
         Instant limit = line.stream().map(v -> startOn(berth, v, free, maintenance))
@@ -341,8 +371,10 @@ public class BerthService {
 
     /**
      * Work the waiting line out again after a change to the berth plan. Each
-     * berth in service is available from its booking's planned end, or now if
-     * it is free; the line is then placed by {@link #plan}. A vessel placed on
+     * berth in service is available from the end of its booking, or from when
+     * its last vessel left, plus the turnaround between ships; a vessel still
+     * alongside after its planned end is taken to leave one overstay step from
+     * now. The line is then placed by {@link #plan}. A vessel placed on
      * a berth that is free now is booked on it at once, if it can start there
      * within the booking horizon; one due later keeps its place but holds no
      * berth, so a far-off call does not block a berth. Every other waiting
@@ -364,15 +396,18 @@ public class BerthService {
                 .collect(Collectors.toMap(a -> a.getBerth().getId(), Function.identity()));
         Map<Long, List<BerthMaintenance>> maintenance = maintenanceRepository.findEndingAfter(now).stream()
                 .collect(Collectors.groupingBy(m -> m.getBerth().getId()));
+        Map<Long, Instant> lastLeft = lastDepartures();
         Map<Long, Instant> available = new HashMap<>();
         for (Berth berth : berths) {
             BerthAllocation booking = held.get(berth.getId());
-            available.put(berth.getId(), booking == null ? now : later(now, booking.getPlannedEnd()));
+            available.put(berth.getId(), booking == null
+                    ? freeAfter(lastLeft.get(berth.getId()), now)
+                    : later(now, expectedEnd(booking, now).plus(turnaround)));
         }
 
         Instant horizon = now.plus(bookingHorizon);
         Set<Long> bookedNow = new HashSet<>();
-        for (Slot slot : plan(line, berths, available, maintenance, lateTolerance)) {
+        for (Slot slot : plan(line, berths, available, maintenance, lateTolerance, turnaround)) {
             VesselVisit visit = slot.visit();
             Berth berth = slot.berth();
             String note = notes.byVisit().get(visit.getId());
@@ -382,7 +417,8 @@ public class BerthService {
                 assign(visit, berth, slot.start(), notes.byBerth().getOrDefault(berth.getId(), note));
             } else {
                 String why = withinHorizon
-                        ? "Berth expected free " + slot.berthFree()
+                        // when the vessel before it is expected to leave; the request adds the turnaround
+                        ? "Berth expected free " + slot.berthFree().minus(turnaround)
                         : "A berth is given within " + span(bookingHorizon) + " of arrival";
                 request(visit, slot.start(), null, note == null ? why : note + ". " + why);
             }
@@ -399,9 +435,11 @@ public class BerthService {
      *
      * A vessel can start on a berth once the berth is available and the
      * vessel is there, with its whole stay clear of the berth's maintenance.
+     * After it, the berth is free again once the turnaround has passed.
      */
     static List<Slot> plan(List<VesselVisit> line, List<Berth> berths, Map<Long, Instant> available,
-                           Map<Long, List<BerthMaintenance>> maintenance, Duration tolerance) {
+                           Map<Long, List<BerthMaintenance>> maintenance, Duration tolerance,
+                           Duration turnaround) {
         List<VesselVisit> waiting = new ArrayList<>(line);
         Map<Long, Instant> free = new HashMap<>(available);
         List<Slot> slots = new ArrayList<>();
@@ -443,7 +481,7 @@ public class BerthService {
                 }
             }
             slots.add(new Slot(chosen, best, free.get(best.getId()), start));
-            free.put(best.getId(), start.plus(stay(chosen)));
+            free.put(best.getId(), start.plus(stay(chosen)).plus(turnaround));
             waiting.remove(chosen);
         }
         return slots;
@@ -504,6 +542,30 @@ public class BerthService {
         }
         List<Long> queue = visitRepository.findWaitingIds(VisitPhase.CLOSED, AllocationStatus.OPEN);
         return new Assignment("QUEUED", null, null, queue.indexOf(visit.getId()) + 1);
+    }
+
+    /**
+     * When a booking's vessel is expected to leave: its planned end, unless the
+     * vessel is alongside and that has passed with no news, in which case it is
+     * taken to be still there and to leave one overstay step from now.
+     */
+    private Instant expectedEnd(BerthAllocation booking, Instant now) {
+        boolean overstaying = booking.getStatus() == AllocationStatus.ACTIVE && !booking.getPlannedEnd().isAfter(now);
+        return overstaying ? now.plus(overstayStep) : booking.getPlannedEnd();
+    }
+
+    /** A berth with no booking is free once the turnaround after its last vessel has passed; now if none has left. */
+    private Instant freeAfter(Instant lastDeparture, Instant now) {
+        return lastDeparture == null ? now : later(now, lastDeparture.plus(turnaround));
+    }
+
+    /** When the last vessel left each berth, by berth id. */
+    private Map<Long, Instant> lastDepartures() {
+        Map<Long, Instant> lastLeft = new HashMap<>();
+        for (Object[] row : allocationRepository.findLastDepartures(AllocationStatus.COMPLETED)) {
+            lastLeft.put((Long) row[0], (Instant) row[1]);
+        }
+        return lastLeft;
     }
 
     private List<Berth> lockBerths() {

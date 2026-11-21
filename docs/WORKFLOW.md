@@ -107,7 +107,7 @@ npm install
 ```
 
 **Confirm it worked:** `node --version` prints a version, and `npm test` in
-`port-console/` reports 69 tests passing (they need neither service running).
+`port-console/` reports 70 tests passing (they need neither service running).
 
 ---
 
@@ -179,9 +179,10 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-116 tests in ten classes: migrations and schema, the scheduling flow, the
+123 tests in eleven classes: migrations and schema, the scheduling flow, the
 planning rules, the console's read views, DCSA publishing and receiving, the
-JSON contract of each controller, and the time limits on the model service. The ones that touch the database need
+JSON contract of each controller, the turnaround between ships, and the time
+limits on the model service. The ones that touch the database need
 MySQL running (Phase 0.3) and use their own schema, `port_core_test`, which is
 wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 `port_core`.
@@ -189,7 +190,7 @@ wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 **Console, from `port-console/`:**
 
 ```powershell
-npm test        # 69 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
+npm test        # 70 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
 npm run lint
 ```
 They run against a mock of the scheduler, so nothing else has to be running.

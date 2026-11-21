@@ -198,6 +198,7 @@ public class PortViewService {
         Instant arrival = firstOf(visit.getPtaBerth(), visit.getRtaBerth(), visit.getEtaBerth());
         Instant agreed = firstOf(visit.getPtaBerth(), visit.getRtaBerth());
         boolean booked = allocation != null && allocation.getStatus() == AllocationStatus.PLANNED;
+        boolean alongside = allocation != null && allocation.getStatus() == AllocationStatus.ACTIVE;
         BerthWindow window = allocation == null ? null : new BerthWindow(
                 allocation.getBerth().getCode(), allocation.getBerth().getName(), allocation.getStatus(),
                 allocation.getPlannedStart(), allocation.getPlannedEnd(),
@@ -221,7 +222,8 @@ public class PortViewService {
                 underWay ? PlanningRules.estimateDueSince(arrival, estimatedAt, now, estimateMilestones) : null,
                 underWay ? PlanningRules.nextEstimateBy(arrival, now, estimateMilestones) : null,
                 booked && agreed != null && agreed.isBefore(now) ? agreed : null,
-                visit.getArrivalDraftMeters());
+                visit.getArrivalDraftMeters(),
+                alongside && allocation.getPlannedEnd().isBefore(now) ? allocation.getPlannedEnd() : null);
     }
 
     private static Instant firstOf(Instant... times) {

@@ -531,6 +531,61 @@ class BerthSchedulingTest {
         assertThat(requestsTo("V001")).hasSize(2);
     }
 
+    // ---- overstays
+
+    @Test
+    void aVesselStillAlongsideAfterItsPlannedEndKeepsItsBerthAndIsFlagged() {
+        Instant arrived = overstayingOnB1();
+        Scheduled waiting = scheduledIn("V005", Duration.ofMinutes(10));
+
+        // V001 is taken to leave one overstay step from now, so V005 is not told to come into an occupied berth
+        assertThat(holderOf("B1")).isEqualTo("V001");
+        assertThat(waiting.assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
+        assertThat(waiting.requestedArrival()).isCloseTo(Instant.now().plus(Duration.ofMinutes(60)),
+                within(1, ChronoUnit.MINUTES));
+        assertThat(views.visits("V001", false).get(0).overstayingSince()).isEqualTo(arrived.plus(STAY));
+        assertThat(views.visits("V005", false).get(0).overstayingSince()).isNull();
+    }
+
+    @Test
+    void thePlannersExpectedDepartureMovesThePlannedEndAndTheWaitingShip() {
+        overstayingOnB1();
+        scheduledIn("V005", Duration.ofMinutes(10));
+        Instant leaves = Instant.now().plus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+
+        visitService.expectCompletion(visitOf("V001").getVisitRef(), leaves, " Crane breakdown ");
+
+        assertThat(allocations.findByVisitAndStatusIn(visitOf("V001"), AllocationStatus.OPEN).orElseThrow()
+                .getPlannedEnd()).isEqualTo(leaves);
+        assertThat(events.findLedger(visitOf("V001")))
+                .filteredOn(e -> e.getMilestone() == Milestone.CARGO_OPS_COMPLETE).singleElement()
+                .satisfies(e -> {
+                    assertThat(e.getClassifier()).isEqualTo(TimeClassifier.ESTIMATED);
+                    assertThat(e.getSource()).isEqualTo(EventSource.TERMINAL);
+                    assertThat(e.getEventTime()).isEqualTo(leaves);
+                    assertThat(e.getBerth().getCode()).isEqualTo("B1");
+                    assertThat(e.getRemarks()).isEqualTo("Crane breakdown");
+                });
+        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(leaves);
+        assertThat(requestsTo("V005")).hasSize(2);
+        assertThat(views.visits("V001", false).get(0).overstayingSince()).isNull();
+    }
+
+    @Test
+    void anExpectedDepartureIsForAVesselAlongsideAndInTheFuture() {
+        schedule("V001");
+        String visitRef = visitOf("V001").getVisitRef();
+        Instant later = Instant.now().plus(Duration.ofHours(3));
+
+        assertThatThrownBy(() -> visitService.expectCompletion(visitRef, later, null))
+                .isInstanceOf(VisitConflictException.class).hasMessageContaining("is not alongside");
+        visitService.arrived("V001", Instant.now());
+        assertThatThrownBy(() -> visitService.expectCompletion(visitRef, Instant.now().minus(Duration.ofHours(1)), null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("must be in the future");
+        assertThatThrownBy(() -> visitService.expectCompletion("VV-NOT-THERE", later, null))
+                .isInstanceOf(VisitNotFoundException.class);
+    }
+
     // ---- booking horizon
 
     @Test
@@ -745,6 +800,19 @@ class BerthSchedulingTest {
         VesselVisit visit = visitOf(vesselId);
         return events.findLedger(visit).stream()
                 .filter(e -> e.getClassifier() == TimeClassifier.REQUESTED).toList();
+    }
+
+    /**
+     * V001 on B1, alongside since 30 hours ago: longer than a typical stay, so
+     * its planned end has passed. B2 to B4 are booked by ships due in two hours.
+     * Returns when V001 arrived.
+     */
+    private Instant overstayingOnB1() {
+        Instant arrived = Instant.now().minus(Duration.ofHours(30)).truncatedTo(ChronoUnit.SECONDS);
+        scheduledIn("V001", Duration.ofHours(-30));
+        visitService.arrived("V001", arrived);
+        List.of("V002", "V003", "V004").forEach(this::schedule);
+        return arrived;
     }
 
     private VesselVisit visitOf(String vesselId) {
