@@ -101,6 +101,12 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
   only a berth its length, beam and draft fit, and is turned away if it fits
   none. Berth maintenance is recorded in advance; no ship is given a berth for
   a stay that would run into it.
+- **A ship that stays longer keeps its berth.** A berth's planned end is a
+  typical stay, so about half of all ships run past it. Such a ship is taken
+  to be still there, the console flags it, and the planner sets when it is
+  expected to leave (the terminal's estimated completion of cargo operations);
+  waiting ships are re-timed from that. An hour is kept between one ship
+  leaving a berth and the next arriving.
 - **A berth is booked within seven days of arrival.** A ship due later keeps
   its place in line and is told when to come, but holds no berth, so a call
   months away cannot block one.
@@ -188,6 +194,7 @@ Four controllers, one per flow.
 | | `GET /api/visits` · `/api/visits/{ref}` | visits in progress; one visit with its ledger |
 | | `PUT /api/port/berths/{code}/release` | the planner frees a berth when a ship's side has not reported leaving |
 | | `PUT /api/visits/{ref}/cancel` | the planner cancels the call of a ship that has not arrived, for example one that never answered |
+| | `PUT /api/visits/{ref}/expected-completion` | the planner sets when a ship alongside is expected to leave; waiting ships are given new times |
 | | `GET /api/port/maintenance` · `POST`, `DELETE /api/port/berths/{code}/maintenance` | berth maintenance: the windows planned, schedule one, remove one |
 | Assistant | `/api/agent/*` | a Gemini assistant; its tools still return sample data |
 
@@ -238,11 +245,14 @@ Four controllers, one per flow.
   served, with a 4-hour tolerance for lateness; nothing searches for the best
   plan overall.
 - **Waiting times follow events, not the clock.** A waiting ship's requested
-  time is worked out again whenever something happens to the berth plan. A
-  berthed ship that simply overstays changes nothing until the next event.
-- **A stay is a median.** A berth's planned end is arrival plus a published
-  median stay for the vessel type, so about half of all ships will overstay
-  it. Nothing yet gives the terminal a better departure time during the stay.
+  time is worked out again whenever something happens to the berth plan, not
+  as time passes. A ship that overstays is flagged on screen at once, but the
+  ships behind it are re-timed only at the next event or when the planner sets
+  its expected departure.
+- **A stay starts as a median.** A berth's planned end is the arrival plus a
+  published median stay for the vessel type until the planner sets a better
+  one. A terminal operating system would forecast it from the moves left and
+  the cranes working the ship; there is no crane or cargo data here.
 - **Vessel type is not matched to terminal type.** Size is checked; type is not.
 - **Stay and speed figures are published medians**, not measurements of this
   port: time in port from UNCTAD (2018), economical speeds from industry
@@ -313,7 +323,7 @@ sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
 standard.
 
 Java tests (101, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`. Console tests (69): `npm test` from `port-console/`.
+`port-scheduler-api/`. Console tests (70): `npm test` from `port-console/`.
 
 ## Data
 

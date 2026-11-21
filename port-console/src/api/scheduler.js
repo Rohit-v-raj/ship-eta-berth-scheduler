@@ -92,3 +92,15 @@ export async function cancelVisit(visitRef, reason, label = 'Cancel the call') {
   const body = reason ? { reason } : undefined
   return (await http('PUT', `/api/visits/${encodeURIComponent(visitRef)}/cancel`, { body, label })).data
 }
+
+/**
+ * The planner's expected departure for a ship alongside: when the terminal
+ * expects its work done and the berth free (the estimated completion of cargo
+ * operations). The berth's planned end moves there and waiting ships are given
+ * new times from it. `at` is an ISO instant; `reason` is optional and kept in
+ * the ledger.
+ */
+export async function expectCompletion(visitRef, at, reason, label = 'Set the expected departure') {
+  const body = reason ? { at, reason } : { at }
+  return (await http('PUT', `/api/visits/${encodeURIComponent(visitRef)}/expected-completion`, { body, label })).data
+}

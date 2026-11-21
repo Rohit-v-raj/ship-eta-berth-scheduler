@@ -39,7 +39,8 @@ never sends one. A requested time changes on screen by itself when the
 terminal re-issues it. An answer that is late is flagged in the table and
 counted in the fourth figure: "No answer for 1 h 20 min". So are a ship past
 its agreed time that has not arrived ("Not arrived, 40 min past agreed
-time") and one that owes a fresh estimate ("Estimate due"). Below the table,
+time"), one still alongside after its berth's planned end ("Overstaying, 2 h
+past planned end") and one that owes a fresh estimate ("Estimate due"). Below the table,
 **Berth maintenance** schedules a window (berth, from, to, reason), lists
 those planned and removes one; a window over a ship's booking is refused, and
 the refusal is shown beside the form.
@@ -54,9 +55,11 @@ lane, and a berth under maintenance now says "maint. to 16:00".
 
 **Visit** shows the four arrival times side by side, the last position the
 ship gave, and the ledger: every time anyone reported, who reported it and
-when. The planner's two actions are here: *Release* for a ship alongside, and
-*Cancel this call* for a ship that has not arrived. A late answer is pointed
-out above the button; whether to cancel is left to the planner.
+when. The planner's actions are here. For a ship alongside: *Expected to
+leave at*, a time in port time and an optional reason, which moves the berth's
+planned end and gives waiting ships new times; and *Release*. For a ship that
+has not arrived: *Cancel this call*. A late answer is pointed out above the
+button; whether to cancel is left to the planner.
 
 **My vessel** has three parts, listed here in the order the conversation runs
 (on screen, *Where you stand* sits above the calculator):
@@ -198,7 +201,7 @@ Security is added, these are the rules it has to enforce:
 
 | Role | Endpoints |
 |---|---|
-| Planner | `GET /api/port/**`, `GET /api/visits/**`, `PUT /api/port/berths/*/release`, `PUT /api/visits/*/cancel`, `POST` and `DELETE /api/port/berths/*/maintenance/**` |
+| Planner | `GET /api/port/**`, `GET /api/visits/**`, `PUT /api/port/berths/*/release`, `PUT /api/visits/*/cancel`, `PUT /api/visits/*/expected-completion`, `POST` and `DELETE /api/port/berths/*/maintenance/**` |
 | Operator | `POST /api/operator/eta`, `POST /api/port-call/v2/events`, and its own visit from `GET /api/visits` |
 | Both | `GET /api/port-call/v2/events` |
 
@@ -215,7 +218,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 69 tests
+npm test             # 70 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

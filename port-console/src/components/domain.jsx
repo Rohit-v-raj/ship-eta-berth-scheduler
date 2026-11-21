@@ -110,8 +110,9 @@ export function AgreementChip({ visit }) {
 
 /**
  * What on a visit needs someone's attention: a ship holding a berth past its
- * agreed arrival without arriving, or a fresh estimate that is due. The
- * scheduler says when; the console only compares that with the clock.
+ * agreed arrival without arriving, a ship still alongside after its berth's
+ * planned end, or a fresh estimate that is due. The scheduler says when; the
+ * console only compares that with the clock.
  */
 export function AttentionChips({ visit }) {
   const { now } = useTime()
@@ -119,6 +120,9 @@ export function AttentionChips({ visit }) {
     <>
       {visit.notArrivedSince && (
         <Chip icon={TriangleAlert} tone="serious">Not arrived, {span(toMillis(now) - toMillis(visit.notArrivedSince))} past agreed time</Chip>
+      )}
+      {visit.overstayingSince && (
+        <Chip icon={TriangleAlert} tone="serious">Overstaying, {span(toMillis(now) - toMillis(visit.overstayingSince))} past planned end</Chip>
       )}
       {visit.estimateDueSince && <Chip icon={Clock} tone="warning">Estimate due</Chip>}
     </>

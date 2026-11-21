@@ -21,6 +21,14 @@ public interface BerthAllocationRepository extends JpaRepository<BerthAllocation
 
     List<BerthAllocation> findByStatusIn(Collection<AllocationStatus> statuses);
 
+    /** For each berth a ship has left: the berth's id and when its last ship left, as {@code [Long, Instant]}. */
+    @Query("""
+            select a.berth.id, max(a.actualEnd) from BerthAllocation a
+            where a.status = :completed and a.actualEnd is not null
+            group by a.berth.id
+            """)
+    List<Object[]> findLastDepartures(@Param("completed") AllocationStatus completed);
+
     /** The allocations of the given visits with their berths loaded, oldest first. */
     @Query("""
             select a from BerthAllocation a

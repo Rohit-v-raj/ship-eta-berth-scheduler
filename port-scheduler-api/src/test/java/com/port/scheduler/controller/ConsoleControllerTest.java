@@ -70,7 +70,7 @@ class ConsoleControllerTest {
             VisitPhase.INBOUND, null, null, 1,
             ETA, REQUESTED, null, null, null, 1008,
             new PositionReport(REPORTED, 61.5, 4.9, 8.5, ETA),
-            REPORTED, REPORTED.plus(Duration.ofMinutes(60)), null, null, null, null, null, null);
+            REPORTED, REPORTED.plus(Duration.ofMinutes(60)), null, null, null, null, null, null, null);
 
     @Autowired MockMvc mvc;
     @MockBean PortViewService views;
@@ -260,6 +260,43 @@ class ConsoleControllerTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message")
                         .value("Conflict: The vessel is alongside; release its berth when it leaves"));
+    }
+
+    @Test
+    void thePlannerSetsAnExpectedDepartureForAVesselAlongside() throws Exception {
+        Instant leaves = Instant.now().plus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+
+        mvc.perform(put("/api/visits/VV-20261013-AB12CD34/expected-completion").contentType("application/json")
+                        .content("{\"at\":\"" + leaves + "\",\"reason\":\"Crane breakdown\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.visitRef").value("VV-20261013-AB12CD34"))
+                .andExpect(jsonPath("$.expectedCompletion").value(leaves.toString()));
+        verify(visitService).expectCompletion("VV-20261013-AB12CD34", leaves, "Crane breakdown");
+    }
+
+    @Test
+    void anExpectedDepartureInThePastOrWithoutATimeIsA400AndForAShipNotAlongsideA409() throws Exception {
+        Instant leaves = Instant.now().plus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+        willThrow(new VisitConflictException("Vessel V005 is not alongside; an expected departure is set for a vessel at its berth"))
+                .given(visitService).expectCompletion("VV-WAITING", leaves, null);
+        willThrow(new VisitNotFoundException("No visit has the reference VV-NOT-THERE"))
+                .given(visitService).expectCompletion("VV-NOT-THERE", leaves, null);
+
+        mvc.perform(put("/api/visits/VV-20261013-AB12CD34/expected-completion").contentType("application/json")
+                        .content("{\"at\":\"2026-01-01T00:00:00Z\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("the expected departure must be in the future"));
+        mvc.perform(put("/api/visits/VV-20261013-AB12CD34/expected-completion").contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("at: must not be null"));
+        mvc.perform(put("/api/visits/VV-WAITING/expected-completion").contentType("application/json")
+                        .content("{\"at\":\"" + leaves + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("Conflict: Vessel V005 is not alongside")));
+        mvc.perform(put("/api/visits/VV-NOT-THERE/expected-completion").contentType("application/json")
+                        .content("{\"at\":\"" + leaves + "\"}"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

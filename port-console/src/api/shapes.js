@@ -76,6 +76,7 @@
  * @property {string|null} nextEstimateBy  the next milestone by which a fresh estimate is expected
  * @property {string|null} notArrivedSince  for a ship holding a berth it has not reached: its agreed arrival, once passed
  * @property {number|null} arrivalDraftMeters  the draft declared for this call
+ * @property {string|null} overstayingSince  for a ship alongside: its berth's planned end, once that has passed with the ship still there
  */
 
 /**

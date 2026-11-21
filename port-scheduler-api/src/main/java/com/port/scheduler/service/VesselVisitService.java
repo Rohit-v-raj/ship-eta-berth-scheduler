@@ -256,6 +256,21 @@ public class VesselVisitService {
         berthService.cancel(visit);
     }
 
+    /**
+     * The planner's expected departure for a vessel alongside: its berth's
+     * planned end moves there and the waiting line is placed again. The reason
+     * is optional and kept with the ledger entry.
+     */
+    @Transactional
+    public void expectCompletion(String visitRef, Instant at, String reason) {
+        VesselVisit visit = visitRepository.findByVisitRefForView(visitRef)
+                .orElseThrow(() -> new VisitNotFoundException("No visit has the reference " + visitRef));
+        if (VisitPhase.CLOSED.contains(visit.getPhase())) {
+            throw new VisitConflictException("Visit " + visitRef + " is already over");
+        }
+        berthService.expectCompletion(visit, at, reason == null || reason.isBlank() ? null : reason.strip());
+    }
+
     private VesselVisit openVisit(String vesselId) {
         return vesselRepository.findByCode(vesselId)
                 .flatMap(vessel -> visitRepository.findByVesselAndPhaseNotIn(vessel, VisitPhase.CLOSED))

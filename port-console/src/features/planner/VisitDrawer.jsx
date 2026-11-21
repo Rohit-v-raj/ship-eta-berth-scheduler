@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import { Ban, LogOut, TriangleAlert } from 'lucide-react'
+import { Ban, CalendarClock, LogOut, TriangleAlert } from 'lucide-react'
 import { useRefreshPort, useVisit } from '@/api/queries'
 import { useTime } from '@/app/providers'
-import { cancelVisit, releaseBerth } from '@/api/scheduler'
+import { cancelVisit, expectCompletion, releaseBerth } from '@/api/scheduler'
 import { AgreementChip, AttentionChips, StandingChip, TimeClassLabel, TimeMark, When } from '@/components/domain'
-import { Button, Notice } from '@/components/ui/controls'
+import { Button, Field, InlineError, Input, Notice } from '@/components/ui/controls'
 import { ConfirmDialog, Sheet } from '@/components/ui/overlay'
-import { readableTimes, span, toMillis } from '@/lib/time'
+import { fromLocalInput, HOUR, readableTimes, span, toLocalInput, toMillis } from '@/lib/time'
 import { answerOverdueMs, sizeText, STANDING, standingOf, TIME_CLASSES, vesselLabel, vesselTypeLabel } from '@/lib/visit'
 import { useCan } from '@/session/session'
 
@@ -163,15 +163,87 @@ function Ledger({ events }) {
 }
 
 /**
- * What the planner may do to a visit. A ship alongside can have its berth
- * released, which records it as departed. A ship that has not arrived can
- * have its call cancelled, which is the planner's answer to a request the
- * ship leaves unanswered. A visit that is over offers neither.
+ * What the planner may do to a visit. A ship alongside can be given an
+ * expected departure, which re-times the ships waiting for its berth, and can
+ * have its berth released, which records it as departed. A ship that has not
+ * arrived can have its call cancelled, which is the planner's answer to a
+ * request the ship leaves unanswered. A visit that is over offers neither.
  */
 function PlannerActions({ visit, onDone }) {
   const standing = standingOf(visit)
   if (standing === STANDING.CLOSED) return null
-  return standing === STANDING.ALONGSIDE ? <ReleaseBerth visit={visit} onDone={onDone} /> : <CancelCall visit={visit} onDone={onDone} />
+  if (standing !== STANDING.ALONGSIDE) return <CancelCall visit={visit} onDone={onDone} />
+  return (
+    <>
+      <ExpectedDeparture visit={visit} />
+      <ReleaseBerth visit={visit} onDone={onDone} />
+    </>
+  )
+}
+
+/**
+ * When the terminal expects a ship alongside to have finished and left. It
+ * starts at the berth's planned end, or two hours from now once that has
+ * passed. Saving moves the planned end and gives waiting ships new times.
+ */
+function ExpectedDeparture({ visit }) {
+  const allowed = useCan('visit.expect')
+  const { zone, now } = useTime()
+  const refresh = useRefreshPort()
+  const planned = toMillis(visit.berth.plannedEnd)
+  const start = planned != null && planned > now.getTime() ? planned : Math.ceil(now.getTime() / HOUR) * HOUR + 2 * HOUR
+  const [at, setAt] = useState(() => toLocalInput(new Date(start), zone))
+  const [reason, setReason] = useState('')
+  const [problem, setProblem] = useState(null)
+  const [failure, setFailure] = useState(null)
+  const [busy, setBusy] = useState(false)
+  if (!allowed) return null
+
+  const submit = async (event) => {
+    event.preventDefault()
+    const leaves = fromLocalInput(at, zone)
+    if (!leaves) return setProblem('Enter a time')
+    if (leaves <= now) return setProblem('The expected departure must be in the future')
+    setProblem(null)
+    setFailure(null)
+    setBusy(true)
+    try {
+      await expectCompletion(visit.visitRef, leaves.toISOString(), reason.trim() || undefined,
+        `Expected departure of ${vesselLabel(visit.vessel)}`)
+      await refresh()
+      setReason('')
+    } catch (failed) {
+      setFailure(readableTimes(failed.message, zone, now))
+    } finally {
+      setBusy(false)
+    }
+    return undefined
+  }
+
+  return (
+    <form onSubmit={submit} noValidate className="flex flex-col gap-3 border-t border-line pt-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field id="expected-departure" label={`Expected to leave at (${zone})`} error={problem}>
+          {(a11y) => <Input {...a11y} type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />}
+        </Field>
+        <Field id="expected-departure-reason" label="Reason (optional)">
+          {(a11y) => (
+            <Input {...a11y} value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} placeholder="for example Crane breakdown" />
+          )}
+        </Field>
+      </div>
+      <div>
+        <Button type="submit" busy={busy}>
+          <CalendarClock className="size-4" aria-hidden="true" />
+          Save expected departure
+        </Button>
+        <p className="mt-1.5 text-xs text-ink-2">
+          Moves {visit.berth.berthCode}'s planned end. Ships waiting for it are given new times.
+        </p>
+      </div>
+      <InlineError>{failure}</InlineError>
+    </form>
+  )
 }
 
 /** One action behind a confirm dialog: busy while it runs, then refresh and close, or say why it failed. */

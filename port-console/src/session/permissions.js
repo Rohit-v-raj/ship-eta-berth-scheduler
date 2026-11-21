@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   'plan.view': [PLANNER],
   'berth.release': [PLANNER],
   'visit.cancel': [PLANNER],
+  'visit.expect': [PLANNER],
   'berth.maintain': [PLANNER],
   'vessel.view': [OPERATOR],
   'position.report': [OPERATOR],
