@@ -90,6 +90,24 @@ class PortCallEventReceiverTest {
     }
 
     @Test
+    void anArrivalAtABerthWhereAnotherVesselStillLiesIsReportedAgainstItsEvent() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        receiver.receive(List.of(berth("ARRI", "EST", now), berth("ARRI", "ACT", now)));   // alongside B1
+        receiver.receive(List.of(estimateFor(named(null, null, "FILL-2")), estimateFor(named(null, null, "FILL-3")),
+                estimateFor(named(null, null, "FILL-4"))));
+        PortCallMessages.Vessel second = named(null, null, "SECOND");
+        receiver.receive(List.of(estimateFor(second)));   // booked on B1, after the vessel there
+
+        List<FeedbackElement> feedback = receiver.receive(List.of(new Event(null, null, null, null, null,
+                new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), second,
+                new Timestamp("ACT", now, null))));
+
+        assertThat(feedback).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
+                tuple("ERROR", "B1 still has IMO9321483 alongside; its departure is recorded first"));
+        assertThat(views.visits("SECOND", false).get(0).phase()).isEqualTo(VisitPhase.INBOUND);
+    }
+
+    @Test
     void anEventForAnotherPortIsRefusedAndOneForThisPortOrNoneIsTakenAsMeantHere() {
         Event calledElsewhere = new Event(null, null, null, new PortCall(null, null, "NLRTM", null), null,
                 new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), SHIP,

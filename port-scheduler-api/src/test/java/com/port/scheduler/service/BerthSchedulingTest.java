@@ -14,6 +14,7 @@ import com.port.scheduler.entity.visit.VisitPhase;
 import com.port.scheduler.exceptions.BerthNotFoundException;
 import com.port.scheduler.exceptions.VisitConflictException;
 import com.port.scheduler.exceptions.VisitNotFoundException;
+import com.port.scheduler.model.view.VisitView;
 import com.port.scheduler.repository.BerthAllocationRepository;
 import com.port.scheduler.repository.BerthMaintenanceRepository;
 import com.port.scheduler.repository.EtaPredictionRepository;
@@ -31,6 +32,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,14 +64,17 @@ class BerthSchedulingTest {
     @Autowired BerthMaintenanceRepository maintenance;
 
     @Test
-    void berthsFillInOrderThenVesselsQueue() {
+    void berthsFillInOrderThenVesselsAreBookedBehindTheShipsThere() {
         assertThat(schedule("V001")).isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
         assertThat(schedule("V002").berthId()).isEqualTo("B2");
         assertThat(schedule("V003").berthId()).isEqualTo("B3");
         assertThat(schedule("V004").berthId()).isEqualTo("B4");
 
-        assertThat(schedule("V005")).isEqualTo(new Assignment("QUEUED", null, null, 1));
-        assertThat(schedule("V006")).isEqualTo(new Assignment("QUEUED", null, null, 2));
+        // each berth now holds a sequence: the fifth and sixth ships are booked after the first to leave
+        assertThat(schedule("V005")).isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
+        assertThat(schedule("V006")).isEqualTo(new Assignment("BERTHED", "B2", "Berth 2", null));
+        assertThat(lineOf("B1")).containsExactly("V001", "V005");
+        assertThat(windowOf("V005").getPlannedStart()).isEqualTo(windowOf("V001").getPlannedEnd());
     }
 
     @Test
@@ -86,6 +91,7 @@ class BerthSchedulingTest {
     @Test
     void releasedBerthGoesToTheNextRequest() {
         List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
+        visitService.arrived("V002", Instant.now());
 
         assertThat(berthService.release("B2")).isTrue();
 
@@ -95,6 +101,7 @@ class BerthSchedulingTest {
     @Test
     void releaseClosesTheAllocationAndTheVisit() {
         schedule("V001");
+        visitService.arrived("V001", Instant.now());
 
         berthService.release("B1");
 
@@ -104,6 +111,19 @@ class BerthSchedulingTest {
         assertThat(visit.getAtdBerth()).isNotNull();
         assertThat(allocation.getStatus()).isEqualTo(AllocationStatus.COMPLETED);
         assertThat(allocation.getActualEnd()).isNotNull();
+    }
+
+    @Test
+    void releasingABerthWithOnlyABookingRecordsNoDeparture() {
+        schedule("V001");   // booked on B1, not arrived
+
+        assertThat(berthService.release("B1")).isFalse();
+
+        assertThat(visitOf("V001").getPhase()).isEqualTo(VisitPhase.INBOUND);
+        assertThat(visitOf("V001").getAtdBerth()).isNull();
+        assertThat(holderOf("B1")).isEqualTo("V001");
+        assertThat(events.findLedger(visitOf("V001")))
+                .noneMatch(e -> e.getMilestone() == Milestone.DEPARTURE_BERTH);
     }
 
     @Test
@@ -171,22 +191,19 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void queuedVesselKeepsItsPlaceAndGetsABerthWhenItAsksAgainAfterARelease() {
-        List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        schedule("V005");
-        schedule("V006");
+    void vesselsBeyondTheHorizonKeepTheirPlaceInLineUntilTheyAreBooked() {
+        assertThat(scheduledIn("V005", Duration.ofDays(10)).assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
+        assertThat(scheduledIn("V006", Duration.ofDays(10)).assignment().queueNumber()).isEqualTo(2);
 
-        assertThat(schedule("V006").queueNumber()).isEqualTo(2);
-
-        berthService.release("B1");
-
-        assertThat(schedule("V005")).isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
-        assertThat(schedule("V006").queueNumber()).isEqualTo(1);
+        assertThat(scheduledIn("V005", Duration.ofHours(2)).assignment())
+                .isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
+        assertThat(scheduledIn("V006", Duration.ofDays(10)).assignment().queueNumber()).isEqualTo(1);
     }
 
     @Test
     void aVesselCanCallAgainAfterItHasDeparted() {
         schedule("V001");
+        visitService.arrived("V001", Instant.now());
         berthService.release("B1");
 
         assertThat(schedule("V001").berthId()).isEqualTo("B1");
@@ -214,35 +231,46 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void aQueuedVesselIsAskedToArriveWhenABerthIsExpectedFree() {
+    void aVesselBookedBehindAnotherIsAskedToArriveWhenItsBerthIsExpectedFree() {
         Instant before = Instant.now();
         List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
 
-        Scheduled queued = scheduled("V005", null);
+        Scheduled behind = scheduled("V005", null);
 
         // each berth is planned free one typical stay after its vessel's ETA; the first to free is B1
         Instant berthFree = before.plus(SAILING).plus(PlanningRules.typicalStay(VesselType.OTHER));
-        assertThat(queued.assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
-        assertThat(queued.requestedArrival()).isCloseTo(berthFree, within(30, ChronoUnit.SECONDS));
+        assertThat(behind.assignment()).isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
+        assertThat(behind.requestedArrival()).isCloseTo(berthFree, within(30, ChronoUnit.SECONDS));
 
         VesselVisit visit = visitOf("V005");
-        assertThat(visit.getRtaBerth()).isEqualTo(queued.requestedArrival());
+        assertThat(visit.getRtaBerth()).isEqualTo(behind.requestedArrival());
         assertThat(visit.getPtaBerth()).isNull();
-        assertThat(events.findAll()).filteredOn(e -> e.getVisit().equals(visit))
-                .filteredOn(e -> e.getClassifier() == TimeClassifier.REQUESTED)
-                .singleElement().satisfies(e -> assertThat(e.getRemarks()).startsWith("Berth expected free"));
+        assertThat(requestsTo("V005")).singleElement().satisfies(e -> {
+            assertThat(e.getBerth().getCode()).isEqualTo("B1");
+            assertThat(e.getRemarks()).startsWith("Berth expected free ");
+            assertThat(Instant.parse(e.getRemarks().substring("Berth expected free ".length())))
+                    .isCloseTo(windowOf("V001").getPlannedEnd(), within(1, ChronoUnit.MILLIS));
+        });
     }
 
     @Test
-    void aReleasedBerthGoesToTheHeadOfTheQueueWithoutItAsking() {
+    void aBerthThatComesFreeTakesTheFirstBookedShipItCanServeMuchSooner() {
         List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        schedule("V005");
-        schedule("V006");
+        schedule("V005");   // behind V001 on B1
+        schedule("V006");   // behind V002 on B2
+        visitService.arrived("V003", Instant.now());
 
         berthService.release("B3");
 
-        assertThat(holderOf("B3")).isEqualTo("V005");
-        assertThat(schedule("V006").queueNumber()).isEqualTo(1);
+        // B3 can take V005 a whole stay sooner, more than the tolerance; V006 would gain nothing there
+        assertThat(lineOf("B3")).containsExactly("V005");
+        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(visitOf("V005").getEtaBerth());
+        assertThat(requestsTo("V005")).last().satisfies(e -> {
+            assertThat(e.getBerth().getCode()).isEqualTo("B3");
+            assertThat(e.getRemarks()).startsWith("Moved from B1 to B3, which can take it 23 h");
+        });
+        assertThat(lineOf("B1")).containsExactly("V001");
+        assertThat(lineOf("B2")).containsExactly("V002", "V006");
     }
 
     @Test
@@ -265,13 +293,12 @@ class BerthSchedulingTest {
 
     @Test
     void aWaitingVesselAcceptsATimeWithNoBerthYet() {
-        List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        Scheduled queued = scheduled("V005", null);
+        Scheduled far = scheduledIn("V005", Duration.ofDays(10));   // beyond the booking horizon
 
-        visitService.confirm("V005", queued.requestedArrival());
+        visitService.confirm("V005", far.requestedArrival());
 
         VesselVisit visit = visitOf("V005");
-        assertThat(visit.getPtaBerth()).isEqualTo(queued.requestedArrival());
+        assertThat(visit.getPtaBerth()).isEqualTo(far.requestedArrival());
         assertThat(events.findLedger(visit)).filteredOn(e -> e.getClassifier() == TimeClassifier.PLANNED)
                 .singleElement().satisfies(e -> assertThat(e.getBerth()).isNull());
     }
@@ -289,9 +316,11 @@ class BerthSchedulingTest {
 
     @Test
     void aNewRequestCancelsTheEarlierConfirmation() {
-        List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        schedule("V005");
-        visitService.confirm("V005", null);   // confirmed for when a berth was expected free
+        schedule("V001");
+        visitService.arrived("V001", Instant.now());
+        List.of("V002", "V003", "V004").forEach(this::schedule);
+        schedule("V005");                     // behind V001 on B1
+        visitService.confirm("V005", null);   // confirmed for when B1 was expected free
 
         berthService.release("B1");           // free now, so the terminal asks for the vessel's own ETA
 
@@ -315,33 +344,30 @@ class BerthSchedulingTest {
     @Test
     void omittingAQueuedCallTakesItOutOfTheQueue() {
         List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        schedule("V005");
-        schedule("V006");
+        scheduledIn("V005", Duration.ofDays(10));
+        scheduledIn("V006", Duration.ofDays(10));
 
         visitService.omit("V005");
 
-        assertThat(schedule("V006").queueNumber()).isEqualTo(1);
+        assertThat(scheduledIn("V006", Duration.ofDays(10)).assignment().queueNumber()).isEqualTo(1);
         assertThat(List.of("B1", "B2", "B3", "B4")).extracting(this::holderOf)
                 .containsExactly("V001", "V002", "V003", "V004");
     }
 
     @Test
-    void whenAShipAheadOmitsItsCallTheNextWaitingShipIsAskedToArriveEarlier() {
+    void whenAShipAheadOnItsBerthOmitsItsCallTheNextShipIsAskedToArriveEarlier() {
         Instant before = Instant.now();
         berthsComeFreeHoursApart();
-        scheduledIn("V005", Duration.ofHours(1));
-        scheduledIn("V006", Duration.ofHours(1));
-        visitService.confirm("V006", null);   // accepted for when the second berth comes free
+        scheduledIn("V005", Duration.ofHours(1));   // behind V001 on B1
+        scheduledIn("V006", Duration.ofHours(1));   // behind V002 on B2, which frees before B1 is free again
+        assertThat(lineOf("B2")).containsExactly("V002", "V006");
+        visitService.omit("V002");
 
-        visitService.omit("V005");
-
-        // V006 is now first in line, so it is asked for when the first berth comes free: three hours sooner
+        // V006 is now first on B2, so it is asked for its own estimate, a stay and more sooner
         VesselVisit visit = visitOf("V006");
-        assertThat(visit.getRtaBerth()).isCloseTo(before.plus(Duration.ofHours(2)).plus(STAY),
-                within(30, ChronoUnit.SECONDS));
+        assertThat(visit.getRtaBerth()).isCloseTo(before.plus(Duration.ofHours(1)), within(30, ChronoUnit.SECONDS));
         assertThat(visit.getPtaBerth()).isNull();
-        assertThat(requestsTo("V006")).hasSize(2)
-                .allSatisfy(e -> assertThat(e.getRemarks()).startsWith("Berth expected free"));
+        assertThat(lineOf("B2")).containsExactly("V006");
     }
 
     @Test
@@ -363,18 +389,16 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void aReleasedBerthMovesUpTheShipsStillWaiting() {
-        Instant before = Instant.now();
+    void aReleasedBerthMovesUpTheShipBookedBehind() {
         berthsComeFreeHoursApart();
-        scheduledIn("V005", Duration.ofHours(1));
-        scheduledIn("V006", Duration.ofHours(1));
+        scheduledIn("V005", Duration.ofHours(1));   // behind V001 on B1
+        visitService.arrived("V001", Instant.now());
 
         berthService.release("B1");
 
-        // V005 takes B1 from its own estimate, and V006 is next for it one stay later
-        assertThat(holderOf("B1")).isEqualTo("V005");
-        assertThat(visitOf("V006").getRtaBerth()).isCloseTo(before.plus(Duration.ofHours(1)).plus(STAY),
-                within(30, ChronoUnit.SECONDS));
+        // V005 is first on B1 now, from its own estimate
+        assertThat(lineOf("B1")).containsExactly("V005");
+        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(visitOf("V005").getEtaBerth());
     }
 
     @Test
@@ -394,9 +418,9 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void theTerminalCancelsACallAndItsBerthGoesToTheHeadOfTheQueue() {
+    void theTerminalCancelsACallAndItsBerthGoesToAShipItCanServeMuchSooner() {
         List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        schedule("V005");
+        schedule("V005");   // behind V001 on B1
 
         visitService.cancelByTerminal(visitOf("V002").getVisitRef(), " no answer to the requested arrival ");
 
@@ -405,8 +429,9 @@ class BerthSchedulingTest {
         assertThat(cancelled.getCancelledBy()).isEqualTo(EventSource.TERMINAL);
         assertThat(cancelled.getRemarks()).isEqualTo("Cancelled by the terminal: no answer to the requested arrival");
         assertThat(holderOf("B2")).isEqualTo("V005");
-        // the vessel may announce itself again; with the port full it waits like anyone else
-        assertThat(schedule("V002")).isEqualTo(new Assignment("QUEUED", null, null, 1));
+        // the vessel may announce itself again; with every berth taken it is booked after a ship there
+        assertThat(schedule("V002").status()).isEqualTo("BERTHED");
+        assertThat(lineOf("B2")).doesNotContain("V002").startsWith("V005");
     }
 
     @Test
@@ -536,12 +561,12 @@ class BerthSchedulingTest {
     @Test
     void aVesselStillAlongsideAfterItsPlannedEndKeepsItsBerthAndIsFlagged() {
         Instant arrived = overstayingOnB1();
-        Scheduled waiting = scheduledIn("V005", Duration.ofMinutes(10));
+        Scheduled next = scheduledIn("V005", Duration.ofMinutes(10));
 
         // V001 is taken to leave one overstay step from now, so V005 is not told to come into an occupied berth
-        assertThat(holderOf("B1")).isEqualTo("V001");
-        assertThat(waiting.assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
-        assertThat(waiting.requestedArrival()).isCloseTo(Instant.now().plus(Duration.ofMinutes(60)),
+        assertThat(lineOf("B1")).containsExactly("V001", "V005");
+        assertThat(next.assignment()).isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
+        assertThat(next.requestedArrival()).isCloseTo(Instant.now().plus(Duration.ofMinutes(60)),
                 within(1, ChronoUnit.MINUTES));
         assertThat(views.visits("V001", false).get(0).overstayingSince()).isEqualTo(arrived.plus(STAY));
         assertThat(views.visits("V005", false).get(0).overstayingSince()).isNull();
@@ -624,22 +649,21 @@ class BerthSchedulingTest {
     // ---- fit
 
     @Test
-    void aVesselTooLongForTheSmallBerthsWaitsForALargeOneAndASmallOneBehindItGoesFirst() {
+    void aVesselTooLongForTheSmallBerthsIsBookedOnALargeOneAndASmallOneBehindItGoesFirst() {
         Instant before = Instant.now();
         scheduledIn("V001", Duration.ofHours(2));
         scheduledIn("V002", Duration.ofHours(5));          // B1 and B2, the 190 m berths, are taken
 
         Scheduled large = sized("V003", Duration.ofHours(1), new VesselSize(180.0, 28.0, 9.0));
 
-        // B3 and B4 are free but take 140 m at most, so it waits for B1
-        assertThat(large.assignment()).isEqualTo(new Assignment("QUEUED", null, null, 1));
+        // B3 and B4 are free but take 140 m at most, so it is booked on B1 after V001
+        assertThat(large.assignment()).isEqualTo(new Assignment("BERTHED", "B1", "Berth 1", null));
         assertThat(large.requestedArrival()).isCloseTo(before.plus(Duration.ofHours(2)).plus(STAY),
                 within(30, ChronoUnit.SECONDS));
         assertThat(holderOf("B3")).isNull();
         // a small vessel behind it in line takes a berth the large one could not
         assertThat(sized("V004", Duration.ofHours(1), new VesselSize(120.0, 20.0, 6.0)).assignment().berthId())
                 .isEqualTo("B3");
-        assertThat(views.visits("V003", false).get(0).queueNumber()).isEqualTo(1);
     }
 
     @Test
@@ -681,49 +705,74 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void maintenanceOverABookingOrAnotherWindowIsRefused() {
-        schedule("V001");   // B1 booked from two hours out, for one stay
+    void maintenanceOverABookedShipMovesItAroundTheWindow() {
+        List.of("V001", "V002", "V003", "V004").forEach(this::schedule);   // every berth booked from two hours out
+        Instant now = Instant.now();
+        Instant from = now.plus(Duration.ofHours(3)).truncatedTo(ChronoUnit.SECONDS);
+        Instant to = now.plus(Duration.ofHours(5)).truncatedTo(ChronoUnit.SECONDS);
+
+        berthService.scheduleMaintenance("B1", from, to, "Fenders");
+
+        // V001 loses its window on B1 and is planned again: B1 after the window is the soonest
+        assertThat(lineOf("B1")).containsExactly("V001");
+        assertThat(visitOf("V001").getRtaBerth()).isEqualTo(to);
+        assertThat(requestsTo("V001")).last().satisfies(e ->
+                assertThat(e.getRemarks()).isEqualTo("Moved for maintenance on B1, " + from + " to " + to));
+        assertThat(maintenance.count()).isEqualTo(1);
+    }
+
+    @Test
+    void maintenanceOverAShipAlongsideOrAnotherWindowIsRefused() {
+        schedule("V001");
+        visitService.arrived("V001", Instant.now());
         Instant now = Instant.now();
 
         assertThatThrownBy(() -> berthService.scheduleMaintenance("B1", now.plus(Duration.ofHours(3)),
                 now.plus(Duration.ofHours(5)), null))
-                .isInstanceOf(VisitConflictException.class).hasMessageContaining("booked for V001");
+                .isInstanceOf(VisitConflictException.class).hasMessageContaining("has V001 alongside until");
         berthService.scheduleMaintenance("B2", now.plus(Duration.ofHours(3)), now.plus(Duration.ofHours(5)), "Fenders");
         assertThatThrownBy(() -> berthService.scheduleMaintenance("B2", now.plus(Duration.ofHours(4)),
                 now.plus(Duration.ofHours(6)), null))
                 .isInstanceOf(VisitConflictException.class).hasMessageContaining("already has maintenance");
-        // before the booking starts is free time
-        berthService.scheduleMaintenance("B1", now, now.plus(Duration.ofHours(1)), null);
+        // after the vessel alongside is expected to leave is free time
+        berthService.scheduleMaintenance("B1", now.plus(STAY).plus(Duration.ofHours(1)),
+                now.plus(STAY).plus(Duration.ofHours(2)), null);
 
         assertThat(maintenance.count()).isEqualTo(2);
     }
 
     @Test
-    void removingAWindowPlansTheWaitingVesselsWithoutIt() {
+    void removingAWindowPlansTheBookedVesselsWithoutIt() {
         Instant before = Instant.now();
-        berthsComeFreeHoursApart();
+        scheduledIn("V001", Duration.ofHours(2));
+        scheduledIn("V002", Duration.ofHours(9));
+        scheduledIn("V003", Duration.ofHours(10));
+        scheduledIn("V004", Duration.ofHours(11));
         Instant b1Free = before.plus(Duration.ofHours(2)).plus(STAY);
         long id = berthService.scheduleMaintenance("B1", b1Free.plus(Duration.ofMinutes(5)),
-                b1Free.plus(Duration.ofHours(6)), null).getId();
+                b1Free.plus(Duration.ofHours(8)), null).getId();
         scheduledIn("V005", Duration.ofHours(1));
+        assertThat(lineOf("B2")).containsExactly("V002", "V005");   // B1 is not free long enough before the window
 
         assertThat(berthService.removeMaintenance("B1", id)).isTrue();
         assertThat(berthService.removeMaintenance("B1", id)).isFalse();
 
+        // without the window B1 takes V005 seven hours sooner, so it moves there
+        assertThat(lineOf("B1")).containsExactly("V001", "V005");
         assertThat(visitOf("V005").getRtaBerth()).isCloseTo(b1Free, within(30, ChronoUnit.SECONDS));
     }
 
     // ---- a booked vessel that falls behind
 
     @Test
-    void aBookedVesselFarBehindGivesItsBerthToAWaitingVesselThatCanComeSooner() {
+    void aBookedVesselFarBehindGivesItsBerthToAShipThatCanComeSooner() {
         Instant agreed = threeBerthsTakenAndV004BookedOnB4();
-        scheduledIn("V005", Duration.ofHours(1));   // waits for B1
+        scheduledIn("V005", Duration.ofHours(1));   // booked behind V001 on B1, a day out
 
         Scheduled afterwards = visitService.declareEta("V004", agreed.plus(Duration.ofHours(7)), POSITION);
 
         assertThat(holderOf("B4")).isEqualTo("V005");
-        assertThat(afterwards.assignment().queueNumber()).isEqualTo(1);   // it keeps its place in line
+        assertThat(afterwards.assignment().status()).isEqualTo("BERTHED");   // planned again, after V005
         VesselVisit visit = visitOf("V004");
         assertThat(visit.getPtaBerth()).isNull();
         assertThat(visit.getRtaBerth()).isAfterOrEqualTo(agreed.plus(Duration.ofHours(7)));
@@ -757,18 +806,21 @@ class BerthSchedulingTest {
     }
 
     @Test
-    void aLateWaitingVesselKeepsItsPlaceButIsSkippedForOneThatCanComeSooner() {
+    void aShipDueSoonUsesTheGapBeforeABookingWithoutDelayingIt() {
         Instant before = Instant.now();
         berthsComeFreeHoursApart();
-        Scheduled late = scheduledIn("V005", Duration.ofHours(40));
+        Scheduled later = scheduledIn("V005", Duration.ofHours(60));   // B1, after V001 and a gap of a day and a half
+        assertThat(later.assignment().berthId()).isEqualTo("B1");
+        Instant laterAsked = visitOf("V005").getRtaBerth();
+
         Scheduled soon = scheduledIn("V006", Duration.ofHours(1));
 
-        // V005 could not use B1 until 40 hours from now, so B1 goes to V006, behind it in line
+        // V006 fits between V001 and V005 on B1; V005 keeps its time
+        assertThat(lineOf("B1")).containsExactly("V001", "V006", "V005");
         assertThat(soon.requestedArrival()).isCloseTo(before.plus(Duration.ofHours(2)).plus(STAY),
                 within(30, ChronoUnit.SECONDS));
-        assertThat(late.assignment().queueNumber()).isEqualTo(1);
-        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(visitOf("V005").getEtaBerth());
-        assertThat(views.visits("V005", false).get(0).queueNumber()).isEqualTo(1);
+        assertThat(visitOf("V005").getRtaBerth()).isEqualTo(laterAsked);
+        assertThat(requestsTo("V005")).hasSize(1);
     }
 
     /** B1 to B3 taken; V004, due in three hours, books B4 and accepts. Returns the arrival agreed for V004. */
@@ -820,12 +872,28 @@ class BerthSchedulingTest {
                 .filter(v -> v.getVessel().getCode().equals(vesselId)).findFirst().orElseThrow();
     }
 
-    /** The vessel holding the berth, read the way the console reads it; null if the berth is free. */
-    private String holderOf(String berthCode) {
+    /**
+     * The vessels on a berth, read the way the console reads them: the one
+     * alongside, then those booked, in the order they are planned.
+     */
+    private List<String> lineOf(String berthCode) {
         return views.visits(null, false).stream()
                 .filter(v -> v.berth() != null && v.berth().berthCode().equals(berthCode))
+                .sorted(Comparator.comparing((VisitView v) -> v.berth().status() != AllocationStatus.ACTIVE)
+                        .thenComparing(v -> v.berth().plannedStart()))
                 .map(v -> v.vessel().code())
-                .findFirst().orElse(null);
+                .toList();
+    }
+
+    /** The first vessel on the berth: the one alongside, or the next booked; null if the berth has none. */
+    private String holderOf(String berthCode) {
+        List<String> line = lineOf(berthCode);
+        return line.isEmpty() ? null : line.get(0);
+    }
+
+    /** The vessel's open allocation. */
+    private BerthAllocation windowOf(String vesselId) {
+        return allocations.findByVisitAndStatusIn(visitOf(vesselId), AllocationStatus.OPEN).orElseThrow();
     }
 
     private Assignment schedule(String vesselId) {

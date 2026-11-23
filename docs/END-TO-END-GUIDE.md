@@ -75,23 +75,26 @@ DCSA's weekly berth planning process, in the order this guide exercises it:
    drop ─ omitted port call        ───────▶   call cancelled, berth passes on
    (no answer)                     ◀───────   the planner may cancel the berth service
  ACT  arrival                      ───────▶   vessel alongside
- ACT  departure                    ───────▶   berth free, next vessel promoted
+ ACT  departure                    ───────▶   berth free, the vessels booked after it move up
 ```
 
 Three things the terminal does without being asked:
 
-- **It keeps waiting ships' times current.** Whenever the berth plan changes (a
-  ship arrives early or late, a berth is released, a call is omitted or
-  cancelled, a ship sends a new estimate), it works out again when each
-  waiting ship can berth, and sends a new `REQ` to every ship whose time moves
-  by 15 minutes or more.
+- **It keeps a berth plan, and every ship's time in it current.** Each berth
+  holds a sequence of ships across the week, each in its own window; a ship
+  due soon may use a gap before a booking, but never delays it. Whenever the
+  plan changes (a ship arrives early or late, a berth is released, a call is
+  omitted or cancelled, a ship sends a new estimate), it works out again when
+  each booked ship can berth, moves a booking to a berth that can take it more
+  than 4 hours sooner, and sends a new `REQ` to every ship whose time moves by
+  15 minutes or more.
 - **It flags an answer that is late.** A ship is expected to accept a request
   within 60 minutes. After that the planner's screen says so. The terminal
   does not take the berth away for silence: the planner decides (step 13).
-- **It assigns a berth again when a booked ship falls far behind.** If a ship
-  holding a berth sends an estimate more than 4 hours after the time it
-  agreed, and a waiting ship can be alongside sooner, the berth goes to that
-  ship (step 19).
+- **It plans a berth again when a booked ship falls far behind.** If a ship
+  holding a booking sends an estimate more than 4 hours after the time it
+  agreed, and another ship can be alongside on that berth sooner, the place
+  goes to that ship (step 19).
 
 It also gives a ship only a berth it fits (step 17) and plans around berth
 maintenance (step 18). The 15 minutes, 60 minutes and 4 hours are this
@@ -252,13 +255,9 @@ requested time you must send that exact time back.
 
 Start from an empty port (section 11 shows how to reset one).
 
-The answers below were captured on 14 Oct 2026 (steps 1 to 19) and 20 and
-21 Nov 2026 (steps 20 to 22). Since 21 Nov the terminal keeps a 60-minute
-turnaround between one ship leaving a berth and the next arriving
-(`port.planning.berth-turnaround-minutes`), so a waiting ship is asked for a
-berth's planned end plus an hour. The waiting ships' requested times in steps
-9, 10, 15, 17, 18 and 19 were moved by that hour, and the rule was checked
-live; everything else is as captured.
+The answers below were captured in one run on 23 Nov 2026, on the scheduler
+with its production settings. Steps 20, 21 and 22 each start again from an
+empty port.
 
 ### Step 1 — The model service on its own
 
@@ -315,7 +314,7 @@ curl -s -X POST $API/api/operator/eta -H "$J" \
   -d '{"vesselId":"NORDVIK","lat":61.62,"lon":4.40,"sog":13.0,"cog":92.0,"destLat":61.612,"destLon":5.07,"vesselType":"GENERAL_CARGO"}'
 ```
 ```json
-{"vesselId":"NORDVIK","etaMinutes":226.9,"estimatedArrival":"2026-10-14T10:16:54.324115900Z","distanceNm":19.13,
+{"vesselId":"NORDVIK","etaMinutes":226.9,"estimatedArrival":"2026-11-23T10:05:02.980251900Z","distanceNm":19.13,
  "naiveEtaMinutes":88.3,"requestedArrival":null,"advisedSpeedKnots":null}
 ```
 
@@ -359,7 +358,7 @@ EOF
 ```
 
 **What to notice.** An empty answer means every event was applied; there is
-nothing to report. Behind it the terminal opened a visit, allocated the first
+nothing to report. Behind it the terminal opened a visit, booked the first
 free berth, and recorded its own answer, a requested arrival.
 
 **DCSA:** this is the standard's `POST /events`. An `EST` for service `BERTH`,
@@ -374,40 +373,43 @@ for general cargo.
 curl -s "$API/api/visits?vessel=NORDVIK"
 ```
 ```json
-[{"visitRef":"VV-20261014-85DEF72E",
+[{"visitRef":"VV-20261123-10D5EF29",
   "vessel":{"code":"NORDVIK","name":"NORDVIK","imoNumber":null,"mmsi":null,"type":"GENERAL_CARGO","loaMeters":null,"beamMeters":null},
   "phase":"INBOUND","terminalCode":"FRO-CT",
   "berth":{"berthCode":"B1","berthName":"Berth 1","status":"PLANNED",
-           "plannedStart":"2026-10-14T10:16:54.324116Z","plannedEnd":"2026-10-15T09:33:54.324116Z","actualStart":null,"actualEnd":null},
+           "plannedStart":"2026-11-23T10:05:02.980252Z","plannedEnd":"2026-11-24T09:22:02.980252Z","actualStart":null,"actualEnd":null},
   "queueNumber":null,
-  "etaBerth":"2026-10-14T10:16:54.324116Z","rtaBerth":"2026-10-14T10:16:54.324116Z","ptaBerth":null,"ataBerth":null,"atdBerth":null,
+  "etaBerth":"2026-11-23T10:05:02.980252Z","rtaBerth":"2026-11-23T10:05:02.980252Z","ptaBerth":null,"ataBerth":null,"atdBerth":null,
   "plannedServiceMinutes":1397,
-  "lastReport":{"reportedAt":"2026-10-14T06:30:01.204146Z","lat":61.62,"lon":4.4,"distanceNm":19.13,"estimatedArrival":"2026-10-14T10:16:54.324116Z"},
-  "requestedAt":"2026-10-14T06:30:01.303417Z","answerDueAt":"2026-10-14T07:30:01.303417Z","cancelledBy":null,"remarks":null,
-  "estimateDueSince":null,"nextEstimateBy":null,"notArrivedSince":null,"arrivalDraftMeters":null}]
+  "lastReport":{"reportedAt":"2026-11-23T06:18:09.377456Z","lat":61.62,"lon":4.4,"distanceNm":19.13,"estimatedArrival":"2026-11-23T10:05:02.980252Z"},
+  "requestedAt":"2026-11-23T06:18:09.398411Z","answerDueAt":"2026-11-23T07:18:09.398411Z","cancelledBy":null,"remarks":null,
+  "estimateDueSince":null,"nextEstimateBy":null,"notArrivedSince":null,"arrivalDraftMeters":null,"overstayingSince":null}]
 ```
 
 **What to notice.**
 
-- `berth` is `B1` with status `PLANNED`: reserved, the ship is not alongside.
-  **The berth is held from this moment**, not from the moment the ship
-  accepts. Another ship reporting in now gets `B2`; it cannot take `B1`.
+- `berth` is `B1` with status `PLANNED`: booked, the ship is not alongside.
+  **The booking is held from this moment**, not from the moment the ship
+  accepts. Another ship can use `B1` only in a gap that ends, with an hour to
+  spare, before NORDVIK's window starts; it can never move NORDVIK.
 - `rtaBerth` equals `etaBerth`. The berth was free, so the terminal asks the
   ship to come at its own estimate.
 - `ptaBerth` is empty: the ship has not accepted yet.
 - `requestedAt` is when the terminal issued that request, and `answerDueAt` is
   60 minutes later: when the ship's answer is expected by.
-- The last four fields are empty for now. `estimateDueSince` and
+- The last five fields are empty for now. `estimateDueSince` and
   `nextEstimateBy` say when the terminal expects a fresh estimate: ports ask
   for one 72, 48 and 24 hours before arrival, and NORDVIK is closer than that.
-  `notArrivedSince` is set once a ship holding a berth is past its agreed time
-  without arriving. `arrivalDraftMeters` and the vessel's `loaMeters` and
+  `notArrivedSince` is set once a booked ship is past its agreed time without
+  arriving, and `overstayingSince` once a ship alongside is past its planned
+  end (step 22). `arrivalDraftMeters` and the vessel's `loaMeters` and
   `beamMeters` are its size, when it gives one (step 17).
 - `plannedEnd` is 1,397 minutes (0.97 days) after the start: the typical stay
   for this vessel type, from published UNCTAD medians.
 - `lastReport` is the position sent in step 4.
 
-A visit has a `berth` or a `queueNumber`, never both.
+A visit has a `berth` or a `queueNumber`, never both. Only a ship due more
+than 7 days ahead has a queue number (step 21).
 
 ### Step 6 — Read the terminal's answer the DCSA way (`PortCallEventsController`, `GET`)
 
@@ -422,15 +424,15 @@ API-Version: 2.0.0
 Content-Type: application/json
 
 {"events":[{
-  "eventID":"bd21cbee-66d3-3f71-8f79-40594585aaf0",
-  "eventUpdatedDateTime":"2026-10-14T06:30:01.303417Z",
-  "portCall":{"portCallID":"645c35f1-89b2-39e5-9a93-d5c831f005ea","portVisitReference":"VV-20261014-85DEF72E","UNLocationCode":"NOFRO"},
-  "terminalCall":{"terminalCallID":"8c7bb367-0f4d-3b09-acf9-8024e4386902","sequenceNumber":1},
-  "portCallService":{"portCallServiceID":"1bbaa9dc-06c0-3243-9c98-0937136e9b07",
+  "eventID":"5dd16476-90ed-32fe-a540-b90f5f428756",
+  "eventUpdatedDateTime":"2026-11-23T06:18:09.398411Z",
+  "portCall":{"portCallID":"52199808-096e-3128-a473-6c9da43af4aa","portVisitReference":"VV-20261123-10D5EF29","UNLocationCode":"NOFRO"},
+  "terminalCall":{"terminalCallID":"a1a3a802-5df7-3c9a-a4d1-ba544e9b3a00","sequenceNumber":1},
+  "portCallService":{"portCallServiceID":"1804cf1d-6aaa-3790-a9e3-0635db97dabd",
     "portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","portCallPhaseTypeCode":"INBD","facilityTypeCode":"BRTH",
     "serviceLocation":{"locationName":"Berth 1","geoCoordinate":{"latitude":"61.612","longitude":"5.07"},"UNLocationCode":"NOFRO"}},
   "vessel":{"vesselName":"NORDVIK","vesselTypeCode":"GCGO"},
-  "timestamp":{"classifierCode":"REQ","serviceDateTime":"2026-10-14T10:16:54.324116Z"}}]}
+  "timestamp":{"classifierCode":"REQ","serviceDateTime":"2026-11-23T10:05:02.980252Z"}}]}
 ```
 
 **What to notice.** The same fact as `rtaBerth` in step 5, in the standard's
@@ -469,12 +471,12 @@ curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{
   "vessel":{"vesselName":"NORDVIK"},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
-  "timestamp":{"classifierCode":"PLN","serviceDateTime":"2026-10-14T15:00:00Z"}
+  "timestamp":{"classifierCode":"PLN","serviceDateTime":"2026-11-23T15:00:00Z"}
 }]}
 EOF
 ```
 ```json
-{"feedbackElements":[{"severity":"ERROR","message":"The requested arrival is now 2026-10-14T10:16:54.324116Z; confirm that time","propertyPath":"$.events[0]"}]}
+{"feedbackElements":[{"severity":"ERROR","message":"The requested arrival is now 2026-11-23T10:05:02.980252Z; confirm that time","propertyPath":"$.events[0]"}]}
 ```
 
 **What to notice.** The HTTP status is still `200`. The refusal is in
@@ -512,12 +514,12 @@ Each berth is planned free one typical stay after its ship is due:
 
 | Berth | Ship | Planned free |
 |---|---|---|
-| `B1` | NORDVIK | `2026-10-15T09:33:54Z` |
-| `B2` | SELJE | `2026-10-15T07:47:03Z` |
-| `B3` | ULSTEIN | `2026-10-15T08:47:03Z` |
-| `B4` | VARTDAL | `2026-10-15T09:47:03Z` |
+| `B1` | NORDVIK | `2026-11-24T09:22:02Z` |
+| `B2` | SELJE | `2026-11-24T07:35:10Z` |
+| `B3` | ULSTEIN | `2026-11-24T08:35:10Z` |
+| `B4` | VARTDAL | `2026-11-24T09:35:10Z` |
 
-### Step 9 — A fifth ship: the queue, a later request, and the speed
+### Step 9 — A fifth ship: booked behind another, a later request, and the speed
 
 HAREID is 60 nm to the north at 14 knots. Its operator calculates, then sends:
 
@@ -527,7 +529,7 @@ ANSWER=$(curl -s -X POST $API/api/operator/eta -H "$J" -d "$Q"); echo "$ANSWER"
 ETA=$(echo "$ANSWER" | pick "d['estimatedArrival']"); MILES=$(echo "$ANSWER" | pick "d['distanceNm']")
 ```
 ```json
-{"vesselId":"HAREID","etaMinutes":501.9,"estimatedArrival":"2026-10-14T14:51:57.967784300Z","distanceNm":60.04,
+{"vesselId":"HAREID","etaMinutes":501.9,"estimatedArrival":"2026-11-23T14:40:04.658040800Z","distanceNm":60.04,
  "naiveEtaMinutes":257.3,"requestedArrival":null,"advisedSpeedKnots":null}
 ```
 
@@ -543,19 +545,25 @@ EOF
 curl -s "$API/api/visits?vessel=HAREID"
 ```
 ```json
-[{"visitRef":"VV-20261014-D1016C85", ... "phase":"INBOUND","terminalCode":null,
-  "berth":null,"queueNumber":1,
-  "etaBerth":"2026-10-14T14:51:57.967784Z","rtaBerth":"2026-10-15T08:47:03Z","ptaBerth":null, ...}]
+[{"visitRef":"VV-20261123-BCDD9613", ... "phase":"INBOUND","terminalCode":"FRO-CT",
+  "berth":{"berthCode":"B2","berthName":"Berth 2","status":"PLANNED",
+           "plannedStart":"2026-11-24T08:35:10Z","plannedEnd":"2026-11-25T07:52:10Z","actualStart":null,"actualEnd":null},
+  "queueNumber":null,
+  "etaBerth":"2026-11-23T14:40:04.658041Z","rtaBerth":"2026-11-24T08:35:10Z","ptaBerth":null, ...
+  "nextEstimateBy":"2026-11-23T08:35:10Z", ...}]
 ```
 
 **What to notice.**
 
-- Every berth is taken, so `berth` is `null` and `queueNumber` is `1`.
+- Every berth is taken by then, so HAREID is **booked behind another ship**:
+  on `B2`, after SELJE, the first berth due free. A berth holds a sequence of
+  ships across the week, each in its own window, and `GET /api/port/berth-plan`
+  now shows two windows on `B2`.
 - `rtaBerth` is **18 hours after** `etaBerth`. The terminal asks the ship to
-  come when a berth is expected free (the earliest planned end among the four,
-  which is SELJE's `B2`, at `07:47:03`) plus the hour's turnaround between
-  ships, not when the ship could get there.
-- `nextEstimateBy` is `2026-10-14T08:47:03Z`, 24 hours before the requested
+  come when SELJE is expected to leave (`07:35:10`) plus the hour's turnaround
+  between ships, not when the ship could get there. The ledger says so: the
+  request carries the remark "Berth expected free 2026-11-24T07:35:10Z".
+- `nextEstimateBy` is `2026-11-23T08:35:10Z`, 24 hours before the requested
   arrival: the terminal expects a fresh estimate by then. If none has come by
   the time it passes, `estimateDueSince` says so and the console flags
   "Estimate due". The standard has no message for the terminal to ask; this
@@ -569,8 +577,8 @@ is the operator's sum. Ask the calculator again, now that the call is open:
 curl -s -X POST $API/api/operator/eta -H "$J" -d "$Q"
 ```
 ```json
-{"vesselId":"HAREID","etaMinutes":501.9,"estimatedArrival":"2026-10-14T14:51:59.759562300Z","distanceNm":60.04,
- "naiveEtaMinutes":257.3,"requestedArrival":"2026-10-15T08:47:03Z","advisedSpeedKnots":5.0}
+{"vesselId":"HAREID","etaMinutes":501.9,"estimatedArrival":"2026-11-23T14:40:05.304495Z","distanceNm":60.04,
+ "naiveEtaMinutes":257.3,"requestedArrival":"2026-11-24T08:35:10Z","advisedSpeedKnots":5.0}
 ```
 
 **What to notice.** The same question as before, and a fuller answer:
@@ -595,7 +603,7 @@ curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 EOF
 ```
 
-### Step 10 — Actual arrival, a waiting ship's time refreshed, and the queue moving
+### Step 10 — Actual arrival and departure, and a booking that moves berth
 
 NORDVIK reports it is alongside. (The walk-through skips the sailing, so this
 is almost four hours before its estimate.)
@@ -612,43 +620,19 @@ curl -s "$API/api/visits?vessel=NORDVIK"
 ```json
 [{... "phase":"BERTHED", ...
   "berth":{"berthCode":"B1","berthName":"Berth 1","status":"ACTIVE",
-           "plannedStart":"2026-10-14T10:16:54.324116Z","plannedEnd":"2026-10-15T05:47:06Z","actualStart":"2026-10-14T06:30:06Z","actualEnd":null},
-  "etaBerth":"2026-10-14T10:16:54.324116Z", ... "ataBerth":"2026-10-14T06:30:06Z", ...}]
+           "plannedStart":"2026-11-23T10:05:02.980252Z","plannedEnd":"2026-11-24T05:35:12Z","actualStart":"2026-11-23T06:18:12Z","actualEnd":null},
+  "etaBerth":"2026-11-23T10:05:02.980252Z", ... "ataBerth":"2026-11-23T06:18:12Z", ...}]
 ```
 
 **What to notice.** The visit is `BERTHED`, the berth `ACTIVE`, and `ataBerth`
-is set. `plannedEnd` has moved from `09:33:54` to `05:47:06`: **a stay counts
+is set. `plannedEnd` has moved from `09:22:02` to `05:35:12`: **a stay counts
 from when the ship is really alongside**, not from its estimate.
 
-That changes the berth plan, and one ship is waiting on it. Nobody sent
-anything on HAREID's behalf, yet:
-
-```bash
-curl -s "$API/api/visits?vessel=HAREID"
-```
-```json
-[{... "berth":null,"queueNumber":1,
-  "etaBerth":"2026-10-14T14:51:57.967784Z","rtaBerth":"2026-10-15T06:47:06Z","ptaBerth":null, ...
-  "requestedAt":"2026-10-14T06:30:06.477881Z","answerDueAt":"2026-10-14T07:30:06.477881Z", ...}]
-```
-
-- `rtaBerth` moved **two hours earlier**, from `08:47:03` to `06:47:06`: `B1`
-  is now the first berth due free, ahead of SELJE's `B2`.
-- `ptaBerth` is empty again, and a new `answerDueAt` has started: the time
-  HAREID accepted in step 9 is no longer the time being asked for.
-
-The terminal does this after every change to the plan, for every waiting ship,
-and re-issues a request only when it moves by 15 minutes or more, so small
-changes do not flood a ship with new times.
-
-**DCSA:** "if there is a new requested time, the previous planned time is
-cancelled."
-
-A ship with no berth cannot report an arrival; HAREID trying gets:
-
-```json
-{"feedbackElements":[{"severity":"ERROR","message":"The vessel has no berth allocated yet","propertyPath":"$.events[0]"}]}
-```
+`B1` will now be free first, at `06:35:12` after the turnaround: two hours
+before `B2`. HAREID's booking stays where it is, at `08:35:10` on `B2`, and
+its acceptance stands. A booking moves to another berth only when that berth
+can take it more than the late tolerance (4 hours) sooner: a ship is not
+asked to change its plans for a gain of two hours.
 
 NORDVIK leaves. Note the event type `DEPA`:
 
@@ -662,20 +646,30 @@ curl -s "$API/api/visits?vessel=HAREID"
 ```
 ```json
 [{... "berth":{"berthCode":"B1","berthName":"Berth 1","status":"PLANNED",
-               "plannedStart":"2026-10-14T14:51:57.967784Z","plannedEnd":"2026-10-15T14:08:57.967784Z", ...},
+               "plannedStart":"2026-11-23T14:40:04.658041Z","plannedEnd":"2026-11-24T13:57:04.658041Z", ...},
   "queueNumber":null,
-  "etaBerth":"2026-10-14T14:51:57.967784Z","rtaBerth":"2026-10-14T14:51:57.967784Z","ptaBerth":null, ...}]
+  "etaBerth":"2026-11-23T14:40:04.658041Z","rtaBerth":"2026-11-23T14:40:04.658041Z","ptaBerth":null, ...
+  "requestedAt":"2026-11-23T06:18:12.427678Z","answerDueAt":"2026-11-23T07:18:12.427678Z", ...}]
 ```
 
 **What to notice.**
 
-- `B1` went straight to HAREID: a freed berth passes to the ship that has
-  waited longest.
-- `rtaBerth` moved again, **16 hours earlier**, to the ship's own estimate.
-  There is no longer anything to wait for.
+- `B1` is free now, and can take HAREID at its own estimate, almost 18 hours
+  sooner than `B2`. That is more than the 4 hours, so HAREID's booking
+  **moves to `B1`**. The ledger's remark says why: "Moved from B2 to B1,
+  which can take it 17 h 55 min sooner".
+- `ptaBerth` is empty again, and a new `answerDueAt` has started: the time
+  HAREID accepted in step 9 is no longer the time being asked for.
 
-HAREID must accept the new request (repeat the `PLN` call of step 9 with the
-new `rtaBerth`).
+The terminal works the plan out again after every change: a ship booked after
+another moves up or back on its berth with it, and a booking that another
+berth can take more than 4 hours sooner moves there. A request is re-issued
+only when it moves by 15 minutes or more, so small changes do not flood a
+ship with new times. HAREID would now accept again, as in step 9; the
+walk-through goes straight on.
+
+**DCSA:** "if there is a new requested time, the previous planned time is
+cancelled."
 
 ### Step 11 — Propose another time
 
@@ -686,12 +680,12 @@ estimate, and the terminal answers:
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{"vessel":{"vesselName":"HAREID"},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
-  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-10-14T16:51:57Z"}}]}
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-11-23T16:40:04Z"}}]}
 EOF
 curl -s "$API/api/visits?vessel=HAREID" | pick "{k: d[0][k] for k in ('etaBerth','rtaBerth','ptaBerth')}"
 ```
 ```
-{'etaBerth': '2026-10-14T16:51:57Z', 'rtaBerth': '2026-10-14T16:51:57Z', 'ptaBerth': None}
+{'etaBerth': '2026-11-23T16:40:04Z', 'rtaBerth': '2026-11-23T16:40:04Z', 'ptaBerth': None}
 ```
 
 **What to notice.** The ship holds a berth, so the terminal simply follows:
@@ -721,17 +715,19 @@ curl -s -X PUT $API/api/port/berths/B2/release
 {"released":true,"berthCode":"B2"}
 ```
 
-Releasing a berth that is already free answers `{"released":false,"berthCode":"B2"}`.
-A berth that does not exist answers `404`:
+Release acts only on a ship **alongside**. A berth with no ship alongside
+answers `{"released":false,...}` and records nothing, even when ships are
+booked on it: `B4`, where VARTDAL is booked but has not arrived, answers
+`{"released":false,"berthCode":"B4"}`. A berth that does not exist answers
+`404`:
 
 ```json
-{"statusCode":404,"message":"Berth not found: Berth ID B9 does not exist","timeStamp":1791959409351}
+{"statusCode":404,"message":"Berth not found: Berth ID B9 does not exist","timeStamp":1795414693774}
 ```
 
 **What to notice.** The effect is the same as the ship's own `ACT` departure in
-step 10: the visit is closed as departed and the berth passes to the head of
-the queue. Release is for **a ship that was alongside**. For one that never
-arrived, the next step is the right action.
+step 10: the visit is closed as departed, and the ships booked after it move
+up. For a ship that never arrived, the next step is the right action.
 **DCSA:** not part of the standard, where an actual departure is the vessel's
 to send. This is the terminal's own override.
 
@@ -744,24 +740,24 @@ REF=$(curl -s "$API/api/visits?vessel=VARTDAL" | pick "d[0]['visitRef']")
 curl -s "$API/api/visits?vessel=VARTDAL"
 ```
 ```json
-[{"visitRef":"VV-20261014-E531F56A", ...
+[{"visitRef":"VV-20261123-1F0D2545", ...
   "berth":{"berthCode":"B4","berthName":"Berth 4","status":"PLANNED",
-           "plannedStart":"2026-10-14T10:30:03Z","plannedEnd":"2026-10-15T09:47:03Z", ...},
-  "rtaBerth":"2026-10-14T10:30:03Z","ptaBerth":null, ...
-  "requestedAt":"2026-10-14T06:30:03.693897Z","answerDueAt":"2026-10-14T07:30:03.693897Z", ...}]
+           "plannedStart":"2026-11-23T10:18:10Z","plannedEnd":"2026-11-24T09:35:10Z", ...},
+  "rtaBerth":"2026-11-23T10:18:10Z","ptaBerth":null, ...
+  "requestedAt":"2026-11-23T06:18:10.427818Z","answerDueAt":"2026-11-23T07:18:10.427818Z", ...}]
 ```
 
-The berth is safe for VARTDAL while it stays silent, and that is the problem:
-it is held for a ship that may not be coming. Once `answerDueAt` has passed,
-the console flags the visit ("No answer for 1 h 20 min"). **The terminal does
-not act on that by itself.** The planner decides, and can cancel the call at
-any time, overdue or not:
+The booking is safe for VARTDAL while it stays silent, and that is the
+problem: the berth is held for a ship that may not be coming. Once
+`answerDueAt` has passed, the console flags the visit ("No answer for 1 h 20
+min"). **The terminal does not act on that by itself.** The planner decides,
+and can cancel the call at any time, overdue or not:
 
 ```bash
 curl -s -X PUT $API/api/visits/$REF/cancel -H "$J" -d '{"reason":"no answer to the requested arrival"}'
 ```
 ```json
-{"cancelled":true,"visitRef":"VV-20261014-E531F56A"}
+{"cancelled":true,"visitRef":"VV-20261123-1F0D2545"}
 ```
 
 The body is optional. A `reason`, at most 400 characters, is kept with the
@@ -782,33 +778,33 @@ curl -s "$API/api/port-call/v2/events?vesselName=VARTDAL&classifierCode=REQ"
 ```
 ```json
 {"events":[{
-  "eventID":"ac29522a-833b-33c7-afe1-8504f23e6131",
-  "eventUpdatedDateTime":"2026-10-14T06:30:03.693897Z",
-  "portCall":{"portCallID":"b8291002-797f-3a1f-b292-38bd8c09c7b3","portVisitReference":"VV-20261014-E531F56A","UNLocationCode":"NOFRO"},
-  "terminalCall":{"terminalCallID":"a7db5b83-3bf8-32c2-a47c-b49d2cde8027","sequenceNumber":1},
-  "portCallService":{"portCallServiceID":"ad135308-00e5-36e1-a99c-2e47118fc571",
+  "eventID":"3940e45d-cca1-3931-91d9-8a8271fb8cf9",
+  "eventUpdatedDateTime":"2026-11-23T06:18:10.427818Z",
+  "portCall":{"portCallID":"960d56f8-ebb5-3395-aca7-41e5641a5393","portVisitReference":"VV-20261123-1F0D2545","UNLocationCode":"NOFRO"},
+  "terminalCall":{"terminalCallID":"8d553fee-6b84-3ee7-af3a-61a208526343","sequenceNumber":1},
+  "portCallService":{"portCallServiceID":"420bba9d-c2fa-3b0d-87ad-2497343db1e3",
     "portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","portCallPhaseTypeCode":"INBD","facilityTypeCode":"BRTH",
     "serviceLocation":{"locationName":"Berth 4","geoCoordinate":{"latitude":"61.61","longitude":"5.071"},"UNLocationCode":"NOFRO"},
     "isCanceled":true},
   "vessel":{"vesselName":"VARTDAL","vesselTypeCode":"GCGO"},
-  "timestamp":{"classifierCode":"REQ","serviceDateTime":"2026-10-14T10:30:03Z"}}]}
+  "timestamp":{"classifierCode":"REQ","serviceDateTime":"2026-11-23T10:18:10Z"}}]}
 ```
 
 **What to notice.**
 
-- `B4` is free. Had ships been waiting, it would have gone to the first of
-  them, and the rest would have been given new times as in step 10. The story
-  *A ship goes quiet* in the console shows exactly that.
+- `B4` is free. Had a ship booked on another berth been able to start on `B4`
+  more than 4 hours sooner, it would have moved there, as HAREID did in step
+  10. The story *A ship goes quiet* in the console shows exactly that.
 - VARTDAL may announce itself again with a new `EST`. That opens a new visit,
-  behind any ship already waiting.
+  planned like any new call.
 - A call can be cancelled only while its ship has not arrived. Cancelling it
   twice, or cancelling a ship alongside, answers `409`; an unknown reference
   answers `404`:
 
 ```json
-{"statusCode":409,"message":"Conflict: Visit VV-20261014-E531F56A is already over","timeStamp":1791959410349}
-{"statusCode":409,"message":"Conflict: The vessel is alongside; release its berth when it leaves","timeStamp":1791959409090}
-{"statusCode":404,"message":"Visit not found: No visit has the reference VV-NOT-THERE","timeStamp":1791959410424}
+{"statusCode":409,"message":"Conflict: Visit VV-20261123-1F0D2545 is already over","timeStamp":1795414694506}
+{"statusCode":409,"message":"Conflict: The vessel is alongside; release its berth when it leaves","timeStamp":...}
+{"statusCode":404,"message":"Visit not found: No visit has the reference VV-NOT-THERE","timeStamp":1795414694571}
 ```
 
 **DCSA:** the action is the terminal's own, but its result is published in the
@@ -846,18 +842,17 @@ The answer has three parts: `visit` (as in step 5), `events` (the ledger) and
 steps 9 to 11, in order:
 
 ```
- ESTIMATED  2026-10-14T14:51:57Z  by VESSEL                the first estimate
- REQUESTED  2026-10-15T08:47:03Z  by TERMINAL              "Berth expected free 2026-10-15T07:47:03Z"
- PLANNED    2026-10-15T08:47:03Z  by VESSEL                accepted
- REQUESTED  2026-10-15T06:47:06Z  by TERMINAL              "Berth expected free 2026-10-15T05:47:06Z": NORDVIK berthed early
- REQUESTED  2026-10-14T14:51:57Z  by TERMINAL  berth B1    promoted when NORDVIK left
- PLANNED    2026-10-14T14:51:57Z  by VESSEL    berth B1    accepted again
- ESTIMATED  2026-10-14T16:51:57Z  by VESSEL                delayed two hours
- REQUESTED  2026-10-14T16:51:57Z  by TERMINAL  berth B1    the terminal follows
+ ESTIMATED  2026-11-23T14:40:04Z  by VESSEL                the first estimate
+ REQUESTED  2026-11-24T08:35:10Z  by TERMINAL  berth B2    "Berth expected free 2026-11-24T07:35:10Z": after SELJE
+ PLANNED    2026-11-24T08:35:10Z  by VESSEL    berth B2    accepted
+ REQUESTED  2026-11-23T14:40:04Z  by TERMINAL  berth B1    "Moved from B2 to B1, which can take it 17 h 55 min sooner"
+ ESTIMATED  2026-11-23T16:40:04Z  by VESSEL                delayed two hours
+ REQUESTED  2026-11-23T16:40:04Z  by TERMINAL  berth B1    the terminal follows
 ```
 
-Each entry also carries `recordedAt`: when it was said, as distinct from the
-time it is about.
+There is no entry for NORDVIK's early arrival: HAREID's time did not change
+then. Each entry also carries `recordedAt`: when it was said, as distinct from
+the time it is about.
 
 ```bash
 curl -s $API/api/port/berth-plan
@@ -868,7 +863,7 @@ ones that overlap the period. Here `B1` has NORDVIK's completed window and
 HAREID's planned one, `B2` has SELJE's completed window, and `B3` and `B4` are
 empty: a cancelled window never occupied its berth and is left out. Without
 `from` and `to` the period is 12 hours back to 48 hours ahead; name your own
-with `?from=2026-10-13T00:00:00Z&to=2026-10-15T00:00:00Z`.
+with `?from=2026-11-22T00:00:00Z&to=2026-11-25T00:00:00Z`.
 
 `curl -s "$API/api/visits?state=all"` includes the closed visits, newest first:
 HAREID still open, VARTDAL cancelled by the `TERMINAL`, ULSTEIN cancelled by
@@ -882,7 +877,7 @@ curl -s -D - -o /dev/null "$API/api/port-call/v2/events?limit=3"
 ```
 HTTP/1.1 200
 API-Version: 2.0.0
-Next-Page-Cursor: 368
+Next-Page-Cursor: 359
 ```
 
 `Next-Page-Cursor` appears only when more events remain. It is the service's
@@ -890,7 +885,7 @@ own marker, so yours will be a different value. Send it back unchanged as
 `cursor`, **with the same filters**, for the next page:
 
 ```bash
-curl -s "$API/api/port-call/v2/events?limit=3&cursor=368"
+curl -s "$API/api/port-call/v2/events?limit=3&cursor=359"
 ```
 
 The ten filters this publisher supports:
@@ -901,7 +896,7 @@ The ten filters this publisher supports:
 | `vesselName`, `vesselIMONumber`, `vesselMMSINumber` | `?vesselName=HAREID` |
 | `portCallServiceTypeCode` | `?portCallServiceTypeCode=BERTH` |
 | `UNLocationCode` | `?UNLocationCode=NOFRO` |
-| `eventTimestampMin`, `eventTimestampMax` | `?eventTimestampMin=2026-10-13T00:00:00Z` |
+| `eventTimestampMin`, `eventTimestampMax` | `?eventTimestampMin=2026-11-23T00:00:00Z` |
 | `limit` (at most 500, default 100), `cursor` | above |
 
 Events of a call that did not take place carry a flag, and the flag says who
@@ -939,34 +934,34 @@ EOF
 No call is opened: a ship that fits nowhere is not left waiting for a berth
 that will never take it.
 
-Now three ships. ALDA gives no size and takes `B2`, the first free berth.
-LANGE is 180 m long with a 9 m draft, due in an hour; KORT is 120 m, also due
-in an hour, and reports after LANGE. (Send each as above, with its own name,
-time and size.)
+Now three ships. ALDA gives no size and is due in two hours. LANGE is 180 m
+long with a 9 m draft, due in an hour; KORT is 120 m, also due in an hour, and
+reports after LANGE. (Send each as above, with its own name, time and size.)
 
 ```bash
 curl -s "$API/api/visits?vessel=LANGE"
 ```
 ```json
-[{"visitRef":"VV-20261014-4FB739E9",
+[{"visitRef":"VV-20261123-E032AF33",
   "vessel":{"code":"LANGE","name":"LANGE","imoNumber":null,"mmsi":null,"type":"GENERAL_CARGO","loaMeters":180.00,"beamMeters":28.00},
-  "phase":"INBOUND","terminalCode":null,"berth":null,"queueNumber":1,
-  "etaBerth":"2026-10-14T07:30:13Z","rtaBerth":"2026-10-15T08:47:13Z", ...
+  "phase":"INBOUND","terminalCode":"FRO-CT",
+  "berth":{"berthCode":"B2","berthName":"Berth 2","status":"PLANNED","plannedStart":"2026-11-23T07:18:16Z","plannedEnd":"2026-11-24T06:35:16Z", ...},
+  "queueNumber":null,"etaBerth":"2026-11-23T07:18:16Z","rtaBerth":"2026-11-23T07:18:16Z", ...
   "arrivalDraftMeters":9.00}]
 ```
 
 | Ship | Size | Got |
 |---|---|---|
-| ALDA | not given | `B2` |
-| LANGE | 180 m, draft 9 m | waiting, 1st in line, asked for `2026-10-15T08:47:13Z`, an hour after `B2` comes free |
-| KORT | 120 m, draft 6.5 m | `B3` |
+| ALDA | not given | `B3`, at its own estimate |
+| LANGE | 180 m, draft 9 m | `B2`, at its own estimate |
+| KORT | 120 m, draft 6.5 m | `B4`, at its own estimate |
 
-**What to notice.** `B3` and `B4` were free when LANGE reported, but take
-140 m at most, so LANGE waits for one of the large berths. KORT reported
-after LANGE, yet took `B3` at once: a free berth that the ship ahead in line
-cannot use goes to the first ship that can. A ship of unknown size, like ALDA,
-is assumed to fit; nothing can be checked against a size the terminal has not
-been told.
+**What to notice.** LANGE fits only `B1` and `B2`. `B1` is booked for HAREID
+from `16:40`, and the nine hours before that are too short for LANGE's stay,
+so LANGE takes `B2`. ALDA, of unknown size, took `B3`: `B2` was in its hour
+of turnaround after SELJE, and of berths a ship can start on equally soon, the
+one whose last ship left first wins. A ship of unknown size is assumed to fit;
+nothing can be checked against a size the terminal has not been told.
 
 **DCSA:** the size fields are the standard's own, optional, on the vessel of
 any event. A unit other than `MTR` or `FOT` is refused with `ERROR`
@@ -975,59 +970,80 @@ any event. A unit other than `MTR` or `FOT` is refused with `ERROR`
 ### Step 18 — Maintenance on a berth (`ConsoleController`)
 
 Maintenance is known in advance and recorded by the planner. No ship is given
-a berth for a stay that would run into a window.
+a berth for a stay that would run into a window, and a window over a booked
+ship's stay moves that ship.
 
-A window over a ship's booking is refused. ALDA holds `B2` from 08:30:
+LANGE is booked on `B2` from `07:18`. The planner records fender repairs there
+from three hours from now, for three hours:
 
 ```bash
 curl -s -X POST $API/api/port/berths/B2/maintenance -H "$J" \
   -d "{\"from\":\"$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"to\":\"$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"reason\":\"Fender repair\"}"
 ```
 ```json
-{"statusCode":409,"message":"Conflict: B2 is booked for ALDA from 2026-10-14T08:30:13Z to 2026-10-15T07:47:13Z; maintenance cannot overlap a booking","timeStamp":1791959414671}
+{"id":5,"berthCode":"B2","berthName":"Berth 2","from":"2026-11-23T09:18:16Z","to":"2026-11-23T12:18:16Z","reason":"Fender repair"}
 ```
 
-`B4` is free. A window there, from an hour from now for 29 hours, is accepted
-with `201`:
+LANGE's booking is planned again around the window, and it is told:
+
+```
+ LANGE  REQ  2026-11-23T12:18:16Z  B2  "Moved for maintenance on B2, 2026-11-23T09:18:16Z to 2026-11-23T12:18:16Z"
+```
+
+A ship moved for maintenance has first claim on the berths: it is planned
+again before any other booking moves. Here `B2` straight after the window is
+the soonest it can be alongside anywhere. A window over the stay of a ship
+**alongside** is refused with `409` ("B2 has … alongside until …; maintenance
+cannot overlap a vessel at the berth"): a ship at the berth cannot be moved
+by a plan.
+
+A second window, on `B4` from an hour from now for 29 hours, moves KORT the
+same way, to `B3` after ALDA, tomorrow at `08:35:15`:
 
 ```bash
 curl -s -X POST $API/api/port/berths/B4/maintenance -H "$J" \
   -d "{\"from\":\"$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)\",\"to\":\"$(date -u -d '+30 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"reason\":\"Crane rail\"}"
 ```
 ```json
-{"id":7,"berthCode":"B4","berthName":"Berth 4","from":"2026-10-14T07:30:14Z","to":"2026-10-15T12:30:14Z","reason":"Crane rail"}
+{"id":6,"berthCode":"B4","berthName":"Berth 4","from":"2026-11-23T07:18:17Z","to":"2026-11-24T12:18:17Z","reason":"Crane rail"}
 ```
 
-A second window on `B4` that overlaps it answers `409` ("B4 already has
-maintenance from … to …"); one that ends before it starts, or is already over,
-answers `400`.
+A third window on `B4` that overlaps it answers `409` ("B4 already has
+maintenance from 2026-11-23T07:18:17Z to 2026-11-24T12:18:17Z"); one that
+ends before it starts, or is already over, answers `400`.
 
 Now SMAA, 100 m, due in two hours, reports. `B4` is free, but a stay of almost
-a day would run into the window:
+a day would run into the window, and the other berths are booked, so SMAA is
+booked on `B4` straight after the window:
 
-```json
-{'queueNumber': 2, 'etaBerth': '2026-10-14T08:30:15Z', 'rtaBerth': '2026-10-15T07:47:13Z'} | berth None
+```
+ SMAA  B4  PLANNED  2026-11-24T12:18:17Z .. 2026-11-25T11:35:17Z   eta 2026-11-23T08:18:17Z
 ```
 
-SMAA waits, 2nd in line behind LANGE, and is asked for an hour after `B3` comes free.
 The windows are listed by `GET /api/port/maintenance`, and each berth's lane in
 `GET /api/port/berth-plan` carries its own under `maintenance`:
 
 ```json
-[{"id":7,"berthCode":"B4","berthName":"Berth 4","from":"2026-10-14T07:30:14Z","to":"2026-10-15T12:30:14Z","reason":"Crane rail"}]
+[{"id":6,"berthCode":"B4","berthName":"Berth 4","from":"2026-11-23T07:18:17Z","to":"2026-11-24T12:18:17Z","reason":"Crane rail"},
+ {"id":5,"berthCode":"B2","berthName":"Berth 2","from":"2026-11-23T09:18:16Z","to":"2026-11-23T12:18:16Z","reason":"Fender repair"}]
 ```
 
-Remove the window, and the waiting ships are planned again without it:
+Remove the `B4` window (your id will differ), and the plan is worked out
+again without it:
 
 ```bash
-curl -s -X DELETE $API/api/port/berths/B4/maintenance/7
+curl -s -X DELETE $API/api/port/berths/B4/maintenance/6
 ```
 ```json
-{"id":7,"removed":true}
+{"id":6,"removed":true}
 ```
 
-SMAA is now booked on `B4` at its own estimate, `2026-10-14T08:30:15Z`. An id
-that does not exist on that berth answers `404`.
+SMAA, booked on `B4`, moves up to its own estimate, `2026-11-23T08:18:17Z`.
+KORT stays on `B3` tomorrow: `B4` cannot take its day-long stay now without
+delaying SMAA, and a booking never moves into a place that would delay
+another. Remove the `B2` window too (`DELETE .../B2/maintenance/5`): LANGE
+returns to its own estimate, and the rest of the walk-through has no
+maintenance. An id that does not exist on a berth answers `404`.
 
 **DCSA:** not part of the standard, which does not describe a terminal's
 berths. The ships see only the result: requested arrivals that already allow
@@ -1035,14 +1051,14 @@ for maintenance.
 
 ### Step 19 — A booked ship falls behind
 
-ALDA accepts `B2` for `2026-10-14T08:30:13Z` (a `PLN`, as in step 7). Then it
+ALDA accepts `B3` for `2026-11-23T08:18:15Z` (a `PLN`, as in step 7). Then it
 sends a new estimate six hours later:
 
 ```bash
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{"vessel":{"vesselName":"ALDA"},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
-  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-10-14T14:30:13Z"}}]}
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-11-23T14:18:15Z"}}]}
 EOF
 ```
 ```json
@@ -1051,31 +1067,31 @@ EOF
 
 | Ship | Before | After |
 |---|---|---|
-| ALDA | `B2`, agreed for 08:30:13 | waiting, 1st in line, asked for `2026-10-15T07:47:13Z` |
-| LANGE | waiting, 1st in line | `B2`, asked for its own estimate, `2026-10-14T07:30:13Z` |
+| ALDA | `B3`, agreed for `08:18:15` | `B2` after LANGE, asked for `2026-11-24T07:35:16Z` |
+| KORT | `B3` after ALDA, tomorrow at `08:35:15` | `B3`, asked for its own estimate, `2026-11-23T07:18:16Z` |
 
 And in the ledger:
 
 ```
- ALDA   REQ  2026-10-15T07:47:13Z  "Berth B2 withdrawn: this estimate is 6 h after the agreed arrival,
-                                    and a waiting vessel can be alongside sooner. Berth expected free 2026-10-15T06:47:13Z"
- LANGE  REQ  2026-10-14T07:30:13Z  B2  "Given up by ALDA, now expected 6 h after its agreed arrival"
+ ALDA  REQ  2026-11-24T07:35:16Z  B2  "Berth B3 withdrawn: this estimate is 6 h after the agreed arrival,
+                                       and another vessel can be alongside sooner"
+ KORT  REQ  2026-11-23T07:18:16Z  B3  "Given up by ALDA, now expected 6 h after its agreed arrival"
 ```
 
 **What to notice.**
 
-- A berth is held from the terminal's answer. It is **assigned again** when
-  the ship holding it sends an estimate more than the tolerance (4 hours)
-  after its agreed arrival **and** a waiting ship that fits can be alongside
-  sooner. Both have to be true: with nobody waiting, ALDA would have kept
-  `B2` at its new time.
-- ALDA keeps its place in line. Being late costs it this berth, not its turn.
-  The same rule applies to waiting ships: a berth goes to the first ship in
-  line that can be alongside within 4 hours of the soonest any waiting ship
-  can.
+- A booking is held from the terminal's answer. It is **given up** when the
+  ship holding it sends an estimate more than the tolerance (4 hours) after
+  its agreed arrival **and** another ship can be alongside on that berth
+  sooner: one booked behind it there, one booked on another berth that would
+  gain more than 4 hours, or one with no booking yet. Both have to be true:
+  had nobody been able to use `B3` sooner, ALDA would have kept it at its new
+  time.
+- ALDA is planned again at once, like a new call, and is now booked on `B2`.
+  KORT, the ship behind it on `B3`, moves up to its own estimate.
 - A smaller delay changes nothing but the time. KORT accepted `B3` for
-  07:30:13, then sent 09:30:13, two hours later: it keeps `B3`, the terminal
-  asks for 09:30:13, and KORT must accept that new time.
+  `07:18:16`, then sent `09:18:16`, two hours later: it keeps `B3`, the
+  terminal asks for `09:18:16`, and KORT must accept that new time.
 
 **DCSA:** DCSA's weekly berth planning process (7 days to 48 hours before
 arrival) asks "Is PTA Berth delayed by 12H?" and, if so, sends both sides
@@ -1085,9 +1101,9 @@ two. Lateness is measured against the time the ship agreed, as there.
 
 ### Step 20 — What a ship reports is checked against its call
 
-Each report from a ship has to fit the state of its call. SVANOY estimated an
-arrival three hours ago, reported it was alongside at that time, and then
-tries five things. The answers below were captured on 20 Nov 2026.
+Reset the port first (section 11). Each report from a ship has to fit the
+state of its call. SVANOY estimated an arrival three hours ago, reported it
+was alongside at that time, and then tries five things.
 
 ```bash
 T0=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
@@ -1105,15 +1121,15 @@ Then, each sent the same way:
 |---|---|
 | an omitted call (`"portCall":{"isOmitted":true}`) | `Vessel SVANOY is alongside; report its departure instead of omitting the call` |
 | an `EST` arrival | `Vessel SVANOY is alongside; an estimated arrival no longer applies to this call` |
-| an `ACT` departure dated before its arrival | `The departure (2026-11-20T09:44:20Z) is before the arrival (2026-11-20T10:44:19Z)` |
-| an `ACT` departure three hours from now | `An actual departure cannot be in the future: 2026-11-20T16:44:20Z has not happened yet` |
+| an `ACT` departure dated before its arrival | `The departure (2026-11-23T02:18:21Z) is before the arrival (2026-11-23T03:18:21Z)` |
+| an `ACT` departure three hours from now | `An actual departure cannot be in the future: 2026-11-23T09:18:22Z has not happened yet` |
 | an `ACT` departure an hour ago | `{}`: accepted |
 
 The ledger keeps the departure at the time the ship sent, as the ship's own
 report:
 
 ```
- DEPARTURE_BERTH  ACTUAL  2026-11-20T12:44:19Z  by VESSEL  B1   recorded 2026-11-20T13:44:20Z
+ DEPARTURE_BERTH  ACTUAL  2026-11-23T05:18:22Z  by VESSEL  B3   recorded 2026-11-23T06:18:22Z
 ```
 
 A ship that never arrived cannot leave, and an arrival cannot be reported
@@ -1122,7 +1138,7 @@ ahead of time. VIGRA, booked for an hour from now:
 | VIGRA sends | Answer |
 |---|---|
 | an `ACT` departure | `Vessel VIGRA has not arrived; a departure needs an arrival first` |
-| an `ACT` arrival five hours from now | `An actual arrival cannot be in the future: 2026-11-20T18:44:21Z has not happened yet` |
+| an `ACT` arrival five hours from now | `An actual arrival cannot be in the future: 2026-11-23T11:18:22Z has not happened yet` |
 
 An event for another port is refused, whether the port is named in `portCall`
 or in the service's location; an event that names no port is taken as meant
@@ -1132,7 +1148,7 @@ here:
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{"portCall":{"UNLocationCode":"NLRTM"},"vessel":{"vesselName":"TANGEN"},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
-  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-11-20T15:44:21Z"}}]}
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2026-11-23T08:18:22Z"}}]}
 EOF
 ```
 ```json
@@ -1149,126 +1165,144 @@ No call is opened and no vessel record is left behind:
 - The planner's *Release* (step 12) still records a departure at the moment
   it is pressed, as the terminal's own report.
 - A ship that has accepted a time and then sends the same estimate again
-  keeps its acceptance: HELLE accepted `2026-11-21T09:44:22Z`, sent that
+  keeps its acceptance: HELLE accepted `2026-11-24T02:18:23Z`, sent that
   estimate again, and its ledger shows no new request. A request is re-sent
-  only when the time moves by 15 minutes or more, whether the ship holds a
-  berth or waits.
+  only when the time moves by 15 minutes or more.
+- An arrival at a berth where another ship still lies is refused too: step 22
+  shows it.
 
 ### Step 21 — A call far ahead holds no berth yet
 
-FEDJE sends an estimate sixty days ahead, with every berth free:
+Reset the port first. FEDJE sends an estimate sixty days ahead, with every
+berth free:
 
 ```bash
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{"vessel":{"vesselName":"FEDJE"},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
-  "timestamp":{"classifierCode":"EST","serviceDateTime":"2027-01-19T13:44:23Z"}}]}
+  "timestamp":{"classifierCode":"EST","serviceDateTime":"2027-01-22T06:18:24Z"}}]}
 EOF
 curl -s "$API/api/visits?vessel=FEDJE"
 ```
 ```json
 [{... "phase":"INBOUND","berth":null,"queueNumber":1,
-  "etaBerth":"2027-01-19T13:44:23Z","rtaBerth":"2027-01-19T13:44:23Z","ptaBerth":null, ...}]
+  "etaBerth":"2027-01-22T06:18:24Z","rtaBerth":"2027-01-22T06:18:24Z","ptaBerth":null, ...}]
 ```
 
 And in its ledger:
 
 ```
- REQUESTED  2027-01-19T13:44:23Z  by TERMINAL   "A berth is given within 7 days of arrival"
+ REQUESTED  2027-01-22T06:18:24Z  by TERMINAL   "A berth is given within 7 days of arrival"
+```
+
+A ship with no berth cannot report an arrival; FEDJE trying gets:
+
+```json
+{"feedbackElements":[{"severity":"ERROR","message":"The vessel has no berth allocated yet","propertyPath":"$.events[0]"}]}
 ```
 
 SOLUND, due in two hours, is booked on `B3` at once. Three days before its
 arrival FEDJE sends a fresh estimate, and is booked:
 
 ```json
-[{... "berth":{"berthCode":"B4","berthName":"Berth 4","status":"PLANNED", ...},
-  "etaBerth":"2026-11-23T13:44:24Z","rtaBerth":"2026-11-23T13:44:24Z", ...}]
+[{... "berth":{"berthCode":"B4","berthName":"Berth 4","status":"PLANNED","plannedStart":"2026-11-26T06:18:24Z", ...},
+  "queueNumber":null,"etaBerth":"2026-11-26T06:18:24Z","rtaBerth":"2026-11-26T06:18:24Z", ...}]
 ```
 
 **What to notice.**
 
-- A ship due more than 7 days ahead (`port.planning.booking-horizon-hours`,
-  168) is told when to come and keeps its place in line, but holds no berth,
-  so a call months away cannot block one. Before this rule, a ship 60 days out
-  held a free berth for all 60 days.
+- Every ship due within 7 days (`port.planning.booking-horizon-hours`, 168)
+  holds a booking: a berth and a window. A ship due later is told when to
+  come and keeps its place in line, but holds no berth, and only such a ship
+  has a `queueNumber`.
 - It is booked at the next change to the plan inside the horizon. Any event
   causes one, and a ship is expected to send an estimate 72 hours out anyway.
-- FEDJE got `B4`, which was free, although the occupied berths would also have
-  been clear by then: of berths a ship could start on equally soon, the one
-  free first wins, so the ship is booked rather than left waiting.
+- FEDJE got `B4`: of berths a ship can start on equally soon, it takes the
+  one whose last ship left first, which has the most time in hand.
 - A booked ship whose new estimate moves beyond the horizon gives its booking
   up, with the remark "Berth B1 withdrawn: the new estimate is more than 7 days
-  away", and keeps its place.
+  away", and keeps its place in line.
 
 ### Step 22 — A ship stays longer (`ConsoleController`)
 
-A berth's planned end is the arrival plus a typical stay for the ship's type,
-so about half of all ships run past it. KVITSOY has been alongside `B1` since
-`2026-11-20T05:08:06Z`, 30 hours, so its planned end, `04:25:06` today, has
-passed. The other berths are booked. Captured on 21 Nov 2026:
+Reset the port first. A berth's planned end is the arrival plus a typical stay
+for the ship's type, so about half of all ships run past it. KVITSOY sends an
+estimate and an actual arrival for 30 hours ago: it has been alongside `B3`
+since `2026-11-22T00:18:25Z`, so its planned end, `23:35:25` yesterday, has
+passed. SULA, ATLOY and HOLMEN, due in an hour, are booked on the other three
+berths.
 
 ```bash
 curl -s "$API/api/visits?vessel=KVITSOY"
 ```
 ```json
 [{... "phase":"BERTHED",
-  "berth":{"berthCode":"B1","berthName":"Berth 1","status":"ACTIVE", ...,"plannedEnd":"2026-11-21T04:25:06Z", ...},
-  "ataBerth":"2026-11-20T05:08:06Z", ... "overstayingSince":"2026-11-21T04:25:06Z"}]
+  "berth":{"berthCode":"B3","berthName":"Berth 3","status":"ACTIVE", ...,"plannedEnd":"2026-11-22T23:35:25Z", ...},
+  "ataBerth":"2026-11-22T00:18:25Z", ... "overstayingSince":"2026-11-22T23:35:25Z"}]
 ```
 
-BJORNSUND reports that it can be alongside in ten minutes, at `11:18:07`:
+BJORNSUND reports that it can be alongside in ten minutes, at `06:28:26`:
 
 ```json
-[{... "berth":null,"queueNumber":1,
-  "etaBerth":"2026-11-21T11:18:07Z","rtaBerth":"2026-11-21T13:08:07.519946Z", ...}]
+[{... "berth":{"berthCode":"B3","berthName":"Berth 3","status":"PLANNED","plannedStart":"2026-11-23T08:18:26.201438Z", ...},
+  "etaBerth":"2026-11-23T06:28:26Z","rtaBerth":"2026-11-23T08:18:26.201438Z", ...}]
 ```
 
-and in its ledger, `REQUESTED 13:08:07 "Berth expected free 2026-11-21T12:08:07.519946100Z"`.
+and in its ledger, `REQUESTED 08:18:26 "Berth expected free 2026-11-23T07:18:26.201437500Z"`.
 
 **What to notice.**
 
 - A ship still alongside after its planned end is taken to be **still there**.
   The terminal assumes it leaves one step from now
   (`port.planning.overstay-step-minutes`, 60), and the next ship can come
-  after the hour's turnaround: two hours from now. Before this rule, the berth
-  counted as free once its planned end had passed, and BJORNSUND would have
-  been told to come at once into an occupied berth.
+  after the hour's turnaround: two hours from now. BJORNSUND is booked on `B3`
+  behind KVITSOY, because every other berth is booked for a day.
 - `overstayingSince` is the planned end that passed; the console shows
   "Overstaying, 6 h 43 min past planned end". It is worked out each time the
   plan changes or is read; no timer runs.
+
+BJORNSUND cannot report an arrival at `B3` while KVITSOY is recorded there:
+
+```json
+{"feedbackElements":[{"severity":"ERROR","message":"B3 still has KVITSOY alongside; its departure is recorded first","propertyPath":"$.events[0]"}]}
+```
+
+The database itself allows only one ship alongside a berth.
 
 The planner, who knows the cranes and the cargo left, sets when KVITSOY is
 expected to leave:
 
 ```bash
 REF=$(curl -s "$API/api/visits?vessel=KVITSOY" | pick "d[0]['visitRef']")
-curl -s -X PUT $API/api/visits/$REF/expected-completion -H "$J" -d '{"at":"2026-11-21T14:08:07Z","reason":"Crane breakdown"}'
+curl -s -X PUT $API/api/visits/$REF/expected-completion -H "$J" -d '{"at":"2026-11-23T09:18:26Z","reason":"Crane breakdown"}'
 ```
 ```json
-{"expectedCompletion":"2026-11-21T14:08:07Z","visitRef":"VV-20261121-F3955C1B"}
+{"expectedCompletion":"2026-11-23T09:18:26Z","visitRef":"VV-20261123-AD3A4640"}
 ```
 
-`B1`'s planned end is now `14:08:07`, the flag is gone, and BJORNSUND is asked
-for `15:08:07`, an hour after it. KVITSOY's ledger and the DCSA feed carry the
-terminal's estimate:
+`B3`'s planned end is now `09:18:26`, the flag is gone, and BJORNSUND is asked
+for `10:18:26`, an hour after it, with the remark "Berth expected free
+2026-11-23T09:18:26Z". Had another berth been able to take BJORNSUND more than
+4 hours sooner, its booking would have moved there instead. KVITSOY's ledger
+and the DCSA feed carry the terminal's estimate:
 
 ```
- CARGO_OPS_COMPLETE  ESTIMATED  2026-11-21T14:08:07Z  by TERMINAL  B1   "Crane breakdown"
+ CARGO_OPS_COMPLETE  ESTIMATED  2026-11-23T09:18:26Z  by TERMINAL  B3   "Crane breakdown"
 ```
 ```bash
 curl -s "$API/api/port-call/v2/events?portCallServiceTypeCode=CARGO_OPERATIONS"
 ```
 ```
- KVITSOY  CARGO_OPERATIONS  CMPL  ALGS  EST  2026-11-21T14:08:07Z  "Crane breakdown"  Berth 1
+ KVITSOY  CARGO_OPERATIONS  CMPL  ALGS  EST  2026-11-23T09:18:26Z  "Crane breakdown"  Berth 3
 ```
 
 A time already past answers `400` ("the expected departure must be in the
 future"); a ship not alongside answers `409` ("Vessel SULA is not alongside;
 an expected departure is set for a vessel at its berth").
 
-KVITSOY then reports its departure at `11:08:09`, earlier than expected.
-BJORNSUND is booked on `B1` an hour later, at `12:08:09`: the turnaround after
-the actual departure.
+KVITSOY then reports its departure at `06:18:27`, earlier than expected.
+BJORNSUND moves up on `B3` to `07:18:27`: the turnaround after the actual
+departure.
 
 **DCSA:** the planner's time is the standard's estimated completion of cargo
 operations (`CARGO_OPERATIONS`, `CMPL`, `EST`), which IMO FAL.5/Circ.52 calls
@@ -1296,7 +1330,9 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `PUT /api/visits/VV-NOT-THERE/cancel` | `404` |
 | `POST` an estimate for a ship that fits no berth | `200`, `ERROR`: `No berth here takes …`, with its size and the largest berth's limits. No call is opened |
 | `POST` a size in a unit other than `MTR` or `FOT` | `200`, `ERROR`: `vesselSizeUnit must be MTR or FOT` |
-| `POST /api/port/berths/{code}/maintenance` over the berth's booking, or over another window | `409`, saying which |
+| `POST /api/port/berths/{code}/maintenance` over the stay of the ship alongside, or over another window | `409`, saying which. Over a booked ship's window it is accepted, and the ship is planned again (step 18) |
+| `PUT /api/port/berths/{code}/release` for a berth with no ship alongside, even one with bookings | `200`, `"released":false`; nothing is recorded |
+| `POST` an `ACT` arrival at a berth where another ship is still recorded alongside | `200`, `ERROR`: `B3 still has KVITSOY alongside; its departure is recorded first` |
 | `POST /api/port/berths/{code}/maintenance` ending before it starts, already over, or without `from` or `to` | `400`, saying which: `to must be after from`, `the window must end in the future`, `from: must not be null` |
 | `DELETE /api/port/berths/{code}/maintenance/{id}` with an id that berth does not have | `404` |
 | `PUT /api/visits/{visitRef}/cancel` with a `reason` longer than 400 characters | `400`, `reason: size must be between 0 and 400` |
@@ -1370,7 +1406,8 @@ sent, so you can compare it with this guide.
 | Steps 2, 5, 15 | **Harbour** (planner seat): figures, map, berth plan, arrivals table. Click a vessel for its four times and ledger |
 | Steps 3, 4, 9 | **My vessel** (operator seat, switch seats in the header): fill in the calculator, *Calculate only*, or *Send estimated arrival to the terminal* |
 | Steps 7, 11, 14 | **My vessel**: *Accept requested arrival*, *Propose another time*, *Omit this call* |
-| Step 10 | **My vessel**: *Report arrival*, *Report departure*. On **Harbour**, a waiting ship's requested time changes by itself |
+| Step 9 | **Harbour**: the berth plan draws each berth's sequence, one bar per booked ship |
+| Step 10 | **My vessel**: *Report arrival*, *Report departure*. On **Harbour**, a booked ship's requested time, and sometimes its berth, changes by itself |
 | Step 12 | **Harbour**: open the visit of a ship alongside, *Release berth* |
 | Step 13 | **Harbour**: a late answer shows as "No answer for ..." in the arrivals table and in the *Awaiting the ship's answer* figure. Open the visit of a ship that has not arrived, *Cancel this call*. The ship's own page then says the terminal cancelled it |
 | Steps 6, 16 | **Port call events** |
@@ -1378,7 +1415,7 @@ sent, so you can compare it with this guide.
 | Step 18 | **Harbour**: the *Berth maintenance* panel schedules and removes windows; the berth plan draws them hatched, and a berth under maintenance now says "maint. to …" |
 | Step 19 | **Stories**: *A ship falls behind*. The ledger in the visit drawer gives the reason |
 | Step 20 | **My vessel**: *Omit this call* and *Propose another time* are not offered once the ship is alongside, and *Report departure* only then; a refusal from the scheduler appears beside the button |
-| Step 21 | **Harbour**: a ship due more than 7 days ahead is listed as waiting with no berth; its visit's ledger says "A berth is given within 7 days of arrival" |
+| Step 21 | **Harbour**: a ship due more than 7 days ahead is listed as in line with no berth; its visit's ledger says "A berth is given within 7 days of arrival". The *Ships booked* figure counts the others |
 | Step 22 | **Harbour**: a ship past its planned end shows "Overstaying, … past planned end"; in its visit, *Expected to leave at* sets the time, above *Release* |
 | Steps 8 to 14 and 19, played for you | **Stories**, the bar at the bottom: *The port fills up*, *A quiet port*, *A change of plan*, *A ship goes quiet*, *A ship falls behind* |
 
@@ -1388,7 +1425,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 123 tests in eleven classes; needs MySQL, not FastAPI
+.\gradlew test          # 136 tests in twelve classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
@@ -1398,12 +1435,14 @@ cd port-scheduler-api
 | `PortCallEventPublisherTest` | What is published, the filters, the cursor, and the two flags for a call that did not take place |
 | `VesselOperatorControllerTest` | The calculator's answer, with and without an open call, and that it stores nothing |
 | `ConsoleControllerTest` | The JSON of every read, of release and of cancel, with their `404`, `409` and `400` answers |
-| `PortViewServiceTest`, `BerthSchedulingTest` | The views and the scheduling rules through real MySQL: waiting ships' times refreshed, the answer and the estimate that are due, the terminal's cancellation, berth fit, maintenance, a booked ship that falls behind |
+| `PortViewServiceTest`, `BerthSchedulingTest` | The views and the scheduling rules through real MySQL: booked ships' times refreshed, the answer and the estimate that are due, the terminal's cancellation, berth fit, maintenance, a booked ship that falls behind, overstays |
+| `BerthSequenceTest` | Several ships per berth: the gap before a booking, a booking that moves to a berth much sooner, maintenance over a booked ship, an arrival at an occupied berth |
+| `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production |
 | `PlanningRulesTest`, `SchemaMigrationTest` | The stay and speed arithmetic; the migrations and the database's own rules |
 
 ```powershell
 cd port-console
-npm test                # 70 tests; nothing else needs to be running
+npm test                # 73 tests; nothing else needs to be running
 npm run lint
 ```
 
@@ -1415,19 +1454,22 @@ rebuild. They never touch `port_core`.
 ## 11. Reset and shut down
 
 **Close every open visit** (the console's *Reset the port* does the same): omit
-the ships that are waiting, then release the berths.
+every ship not yet alongside, booked or in line, then release the berths with a
+ship alongside. Each berth released this way is free for the next ship an hour
+later, after the turnaround.
 
 ```bash
 curl -s $API/api/visits | python -c "
 import sys, json, urllib.request as u
 api = '$API'
 visits = json.load(sys.stdin)
+alongside = lambda v: v['berth'] is not None and v['berth']['status'] == 'ACTIVE'
 for v in visits:
-    if not v['berth']:
+    if not alongside(v):
         body = json.dumps({'events': [{'vessel': {'vesselName': v['vessel']['code']}, 'portCall': {'isOmitted': True}}]}).encode()
         u.urlopen(u.Request(api + '/api/port-call/v2/events', data=body, headers={'Content-Type': 'application/json'}, method='POST'))
 for v in visits:
-    if v['berth']:
+    if alongside(v):
         u.urlopen(u.Request(api + '/api/port/berths/' + v['berth']['berthCode'] + '/release', method='PUT'))
 print('closed', len(visits))"
 ```
@@ -1439,6 +1481,7 @@ the scheduler and run this in MySQL:
 USE port_core;
 DELETE FROM visit_event; DELETE FROM eta_prediction;
 DELETE FROM berth_allocation; DELETE FROM vessel_visit; DELETE FROM vessel;
+DELETE FROM berth_maintenance;
 ```
 
 **Shut down:** press Ctrl+C in each of the three terminals.
@@ -1487,19 +1530,19 @@ not been run through DCSA's conformance tests.
 
 | Method and address | Controller | Changes anything? | Step |
 |---|---|---|---|
-| `POST /api/port-call/v2/events` | `PortCallEventsController` | Yes: the only way a vessel's side opens, changes or ends a call | 4, 7 to 12, 14, 17, 19 |
+| `POST /api/port-call/v2/events` | `PortCallEventsController` | Yes: the only way a vessel's side opens, changes or ends a call | 4, 7 to 12, 14, 17, 19 to 22 |
 | `GET /api/port-call/v2/events` | `PortCallEventsController` | No | 6, 13, 16 |
 | `POST /api/operator/eta` | `VesselOperatorController` | No | 3, 9 |
 | `GET /api/port` | `ConsoleController` | No | 2 |
 | `GET /api/port/berth-plan` | `ConsoleController` | No | 15, 18 |
 | `GET /api/visits` (`?vessel=`, `?state=all`) | `ConsoleController` | No | 2, 5, 10, 13, 15 |
 | `GET /api/visits/{visitRef}` | `ConsoleController` | No | 15 |
-| `PUT /api/port/berths/{berthCode}/release` | `ConsoleController` | Yes: the planner frees the berth of a ship that has left | 12 |
+| `PUT /api/port/berths/{berthCode}/release` | `ConsoleController` | Yes: the planner frees the berth of a ship alongside that has left; bookings are left as they are | 12 |
 | `PUT /api/visits/{visitRef}/cancel` | `ConsoleController` | Yes: the planner cancels the call of a ship that has not arrived | 13 |
 | `PUT /api/visits/{visitRef}/expected-completion` | `ConsoleController` | Yes: the planner sets when a ship alongside is expected to leave | 22 |
 | `GET /api/port/maintenance` | `ConsoleController` | No | 18 |
-| `POST /api/port/berths/{berthCode}/maintenance` | `ConsoleController` | Yes: the planner records maintenance; waiting ships are planned around it | 18 |
-| `DELETE /api/port/berths/{berthCode}/maintenance/{id}` | `ConsoleController` | Yes: the window is removed and waiting ships are planned again | 18 |
+| `POST /api/port/berths/{berthCode}/maintenance` | `ConsoleController` | Yes: the planner records maintenance; booked ships it overlaps are planned again around it | 18 |
+| `DELETE /api/port/berths/{berthCode}/maintenance/{id}` | `ConsoleController` | Yes: the window is removed and the plan is worked out again | 18 |
 | `GET /api/agent/ping`, `POST /api/agent/chat`, `POST /api/agent/evaluate` | `AgentController` | No (sample data) | section 8 |
 | `GET /health`, `POST /predict` on port 8000 | FastAPI, not Spring | No | 1 |
 

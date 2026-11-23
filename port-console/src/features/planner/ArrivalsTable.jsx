@@ -20,7 +20,7 @@ export function ArrivalsTable({ visits, selectedRef, onSelect }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[920px] border-collapse text-left text-[13px]">
-        <caption className="sr-only">Visits in progress, in queue order</caption>
+        <caption className="sr-only">Visits in progress, in the order the calls were opened</caption>
         <thead>
           <tr className="border-b border-line text-xs text-ink-2">
             <Th>Vessel</Th>

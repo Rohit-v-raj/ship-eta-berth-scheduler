@@ -15,7 +15,14 @@ import java.util.Optional;
 
 public interface BerthAllocationRepository extends JpaRepository<BerthAllocation, Long> {
 
-    Optional<BerthAllocation> findByBerthAndStatusIn(Berth berth, Collection<AllocationStatus> statuses);
+    /** A berth's allocations in the given states; a berth may hold several bookings. */
+    List<BerthAllocation> findByBerthAndStatusIn(Berth berth, Collection<AllocationStatus> statuses);
+
+    /**
+     * A berth's allocation in one state. Only for {@code ACTIVE}, of which the
+     * database allows one per berth (the vessel alongside).
+     */
+    Optional<BerthAllocation> findByBerthAndStatus(Berth berth, AllocationStatus status);
 
     Optional<BerthAllocation> findByVisitAndStatusIn(VesselVisit visit, Collection<AllocationStatus> statuses);
 

@@ -136,7 +136,7 @@ function VesselDesk({ port, vesselCode }) {
               </Notice>
             ) : (
               <Notice icon={Ship} title={`${vesselCode} has no call in progress`}>
-                Work out your arrival below and send it. The terminal answers with a berth or a place in the queue, and the time it wants you there.
+                Work out your arrival below and send it. The terminal answers with a berth, or a place in line if you are due too far ahead, and the time it wants you there.
               </Notice>
             )}
           </Panel>
@@ -182,7 +182,7 @@ function Outcome({ visit, port, answer }) {
       ? `You are alongside ${visit.berth.berthName}`
       : standing === STANDING.RESERVED
         ? `${visit.berth.berthName} is reserved for you`
-        : 'Every berth is taken: you are in the queue'
+        : 'You are in line: a berth is given closer to arrival'
 
   return (
     <div className="flex flex-col gap-5 px-4 py-4">

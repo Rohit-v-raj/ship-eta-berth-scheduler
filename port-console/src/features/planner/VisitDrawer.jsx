@@ -238,7 +238,7 @@ function ExpectedDeparture({ visit }) {
           Save expected departure
         </Button>
         <p className="mt-1.5 text-xs text-ink-2">
-          Moves {visit.berth.berthCode}'s planned end. Ships waiting for it are given new times.
+          Moves {visit.berth.berthCode}'s planned end. Ships booked after it are given new times.
         </p>
       </div>
       <InlineError>{failure}</InlineError>
@@ -302,7 +302,7 @@ function ReleaseBerth({ visit, onDone }) {
 
 const NO_ANSWER = 'no answer to the requested arrival'
 
-/** Cancel the call of a ship that has not arrived. Its berth, or its place in the queue, passes on. */
+/** Cancel the call of a ship that has not arrived. Its booking, or its place in line, is given up. */
 function CancelCall({ visit, onDone }) {
   const allowed = useCan('visit.cancel')
   const { now } = useTime()
@@ -315,8 +315,8 @@ function CancelCall({ visit, onDone }) {
   if (!allowed) return null
 
   const passesOn = visit.berth
-    ? `${visit.berth.berthCode} goes to the head of the queue, if anyone is waiting.`
-    : 'The ships behind it in the queue move up.'
+    ? `The ships booked after it on ${visit.berth.berthCode} move up.`
+    : 'The ships behind it in line move up.'
 
   return (
     <section className="border-t border-line pt-4">
@@ -334,13 +334,13 @@ function CancelCall({ visit, onDone }) {
         Cancel this call
       </Button>
       <p className="mt-1.5 text-xs text-ink-2">
-        For a ship that is not coming or does not answer. {passesOn} The ship may announce itself again and joins the back of the queue.
+        For a ship that is not coming or does not answer. {passesOn} The ship may announce itself again and is planned as a new call.
       </p>
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
         title={`Cancel the call of ${name}?`}
-        description={`${name} loses ${visit.berth ? visit.berth.berthCode : 'its place in the queue'}, and its operator is told the terminal cancelled the call. ${passesOn}`}
+        description={`${name} loses ${visit.berth ? `its booking on ${visit.berth.berthCode}` : 'its place in line'}, and its operator is told the terminal cancelled the call. ${passesOn}`}
         confirmLabel="Cancel the call"
         dismissLabel="Keep the call"
         onConfirm={confirm}

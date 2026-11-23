@@ -2,6 +2,7 @@ package com.port.scheduler;
 
 import com.port.scheduler.entity.topology.Berth;
 import com.port.scheduler.entity.vessel.Vessel;
+import com.port.scheduler.entity.visit.AllocationStatus;
 import com.port.scheduler.entity.visit.BerthAllocation;
 import com.port.scheduler.entity.visit.EventSource;
 import com.port.scheduler.entity.visit.VesselVisit;
@@ -39,7 +40,7 @@ class SchemaMigrationTest {
     void migrationsApplyFromEmptyAndSeedTheDemoPort() {
         assertThat(jdbc.queryForList(
                 "select version from flyway_schema_history where success = 1 order by installed_rank", String.class))
-                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8");
+                .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9");
         assertThat(berths.findAllByOrderBySeqAsc()).extracting(Berth::getCode)
                 .containsExactly("B1", "B2", "B3", "B4");
     }
@@ -65,15 +66,20 @@ class SchemaMigrationTest {
     }
 
     @Test
-    void databaseRefusesASecondOpenAllocationOnTheSameBerth() {
+    void aBerthHoldsSeveralBookingsButTheDatabaseRefusesASecondVesselAlongside() {
         Berth b1 = berths.findByCode("B1").orElseThrow();
-        allocations.saveAndFlush(new BerthAllocation(openVisit("DB-1"), b1, Instant.now()));
+        Instant now = Instant.now();
+        BerthAllocation first = allocations.saveAndFlush(new BerthAllocation(openVisit("DB-1"), b1, now));
+        BerthAllocation second = allocations.saveAndFlush(
+                new BerthAllocation(openVisit("DB-2"), b1, now.plusSeconds(86_400)));
 
-        BerthAllocation doubleBooking = new BerthAllocation(openVisit("DB-2"), b1, Instant.now());
+        first.setStatus(AllocationStatus.ACTIVE);
+        allocations.saveAndFlush(first);
+        second.setStatus(AllocationStatus.ACTIVE);
 
-        assertThatThrownBy(() -> allocations.saveAndFlush(doubleBooking))
+        assertThatThrownBy(() -> allocations.saveAndFlush(second))
                 .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("uq_alloc_one_open_per_berth");
+                .hasMessageContaining("uq_alloc_one_active_per_berth");
     }
 
     @Test

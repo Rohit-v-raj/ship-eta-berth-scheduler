@@ -329,10 +329,10 @@ class ConsoleControllerTest {
     }
 
     @Test
-    void maintenanceThatEndsBeforeItStartsOrIsOverIsA400AndOneOverABookingIsA409() throws Exception {
+    void maintenanceThatEndsBeforeItStartsOrIsOverIsA400AndOneOverAVesselAlongsideIsA409() throws Exception {
         Instant from = Instant.now().plus(Duration.ofDays(1)).truncatedTo(ChronoUnit.SECONDS);
         given(berthService.scheduleMaintenance("B1", from, from.plus(Duration.ofHours(2)), null))
-                .willThrow(new VisitConflictException("B1 is booked for V001 from ... to ...; maintenance cannot overlap a booking"));
+                .willThrow(new VisitConflictException("B1 has V001 alongside until ...; maintenance cannot overlap a vessel at the berth"));
 
         mvc.perform(post("/api/port/berths/B1/maintenance").contentType("application/json")
                         .content("{\"from\":\"" + from + "\",\"to\":\"" + from.minus(Duration.ofHours(1)) + "\"}"))
@@ -349,7 +349,7 @@ class ConsoleControllerTest {
         mvc.perform(post("/api/port/berths/B1/maintenance").contentType("application/json")
                         .content("{\"from\":\"" + from + "\",\"to\":\"" + from.plus(Duration.ofHours(2)) + "\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("Conflict: B1 is booked")));
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.startsWith("Conflict: B1 has V001 alongside")));
     }
 
     @Test
