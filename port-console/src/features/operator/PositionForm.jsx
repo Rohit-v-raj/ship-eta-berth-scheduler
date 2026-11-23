@@ -8,7 +8,7 @@ import { useRefreshPort } from '@/api/queries'
 import { askEta } from '@/api/scheduler'
 import { When, knots } from '@/components/domain'
 import { Button, Field, InlineError, Input, Select } from '@/components/ui/controls'
-import { bearingDeg, insideTrainingRegion } from '@/lib/geo'
+import { bearingDeg, insideTrainingRegion, isPosition } from '@/lib/geo'
 import { span } from '@/lib/time'
 import { VESSEL_TYPES } from '@/lib/visit'
 
@@ -40,14 +40,19 @@ const schema = z.object({
   draft: optionalMetres('draft'),
 })
 
-export function PositionForm({ port, vesselCode, visit, picked, onPositionChange, answer, onAnswer }) {
+const NEEDED_ONCE = 'Needed the first time the terminal hears of this ship'
+
+export function PositionForm({ port, vesselCode, visit, knownVessel, picked, onPositionChange, answer, onAnswer }) {
   const refresh = useRefreshPort()
   const destination = port.berths[0]
   const last = visit?.lastReport
   const [failure, setFailure] = useState(null)
   const [pending, setPending] = useState(null)
 
-  const { register, handleSubmit, setValue, control, formState: { errors } } = useForm({
+  // the terminal keeps a ship's length and beam once given; until then it opens no call without them
+  const vessel = knownVessel ?? visit?.vessel ?? null
+  const sizeOnRecord = vessel?.loaMeters != null && vessel?.beamMeters != null
+  const { register, handleSubmit, setValue, setError, control, formState: { errors } } = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
       lat: last?.lat ?? 61.62,
@@ -55,8 +60,8 @@ export function PositionForm({ port, vesselCode, visit, picked, onPositionChange
       sog: 12,
       cog: 90,
       vesselType: visit?.vessel.type ?? 'GENERAL_CARGO',
-      lengthOverall: visit?.vessel.loaMeters ?? '',
-      width: visit?.vessel.beamMeters ?? '',
+      lengthOverall: vessel?.loaMeters ?? '',
+      width: vessel?.beamMeters ?? '',
       draft: visit?.arrivalDraftMeters ?? '',
     },
   })
@@ -72,13 +77,20 @@ export function PositionForm({ port, vesselCode, visit, picked, onPositionChange
   const [latText, lonText] = useWatch({ control, name: ['lat', 'lon'] })
   const lat = Number(latText)
   const lon = Number(lonText)
+  // the map shows the position as it is typed; one that is no real place shows nothing until it is corrected
+  const real = isPosition(lat, lon)
   useEffect(() => {
-    if (Number.isFinite(lat) && Number.isFinite(lon)) onPositionChange?.({ lat, lon })
-  }, [lat, lon, onPositionChange])
-  const outside = Number.isFinite(lat) && Number.isFinite(lon) && !insideTrainingRegion(lat, lon)
+    onPositionChange?.(real ? { lat, lon } : null)
+  }, [real, lat, lon, onPositionChange])
+  const outside = real && !insideTrainingRegion(lat, lon)
 
   const run = (kind) =>
     handleSubmit(async (values) => {
+      if (kind === 'send' && !sizeOnRecord && (values.lengthOverall == null || values.width == null)) {
+        if (values.lengthOverall == null) setError('lengthOverall', { message: NEEDED_ONCE })
+        if (values.width == null) setError('width', { message: NEEDED_ONCE })
+        return
+      }
       const query = {
         vesselId: vesselCode,
         lat: values.lat,
@@ -148,7 +160,7 @@ export function PositionForm({ port, vesselCode, visit, picked, onPositionChange
 
       <fieldset className="grid grid-cols-3 gap-3">
         <legend className="mb-1 text-[13px] font-medium">
-          Ship&apos;s size <span className="font-normal text-ink-2">(optional, metres)</span>
+          Ship&apos;s size <span className="font-normal text-ink-2">(metres)</span>
         </legend>
         <Field id="lengthOverall" label="Length overall" error={errors.lengthOverall?.message}>
           {(a11y) => <Input {...a11y} inputMode="decimal" {...register('lengthOverall')} />}
@@ -160,7 +172,7 @@ export function PositionForm({ port, vesselCode, visit, picked, onPositionChange
           {(a11y) => <Input {...a11y} inputMode="decimal" {...register('draft')} />}
         </Field>
         <p className="col-span-3 text-xs text-ink-2">
-          Sent with the estimate. The terminal gives a ship only a berth it fits, and turns away one that fits none; without a size it assumes the ship fits.
+          Sent with the estimate. The terminal needs the length and beam the first time it hears of a ship, and keeps them; it gives a ship only a berth it fits. The draft for this call is due a day before arrival; until then the largest draft the ship has declared is used.
         </p>
       </fieldset>
 

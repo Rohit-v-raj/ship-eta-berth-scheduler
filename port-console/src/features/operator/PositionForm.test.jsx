@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
@@ -61,6 +61,8 @@ describe('PositionForm', () => {
     const calls = recordCalls({ advisedSpeedKnots: 7.5 })
     renderWithApp(<Desk />, asOperator)
 
+    await userEvent.type(screen.getByLabelText('Length overall'), '129')
+    await userEvent.type(screen.getByLabelText('Beam'), '20')
     await userEvent.click(screen.getByRole('button', { name: 'Send estimated arrival to the terminal' }))
 
     expect(await screen.findByText(/This estimate was sent to the terminal with your position/)).toBeInTheDocument()
@@ -72,6 +74,9 @@ describe('PositionForm', () => {
       vesselTypeCode: 'GCGO',
       vesselPosition: { geoCoordinate: { latitude: '61.62', longitude: '4.45' } },
       milesToDestinationPort: 60.04,
+      vesselSizeUnit: 'MTR',
+      lengthOverall: 129,
+      width: 20,
     })
     // asked once for the estimate, and once more for the speed that meets the terminal's answer
     expect(calls.eta).toHaveLength(2)
@@ -83,6 +88,7 @@ describe('PositionForm', () => {
     renderWithApp(<Desk />, asOperator)
 
     await userEvent.type(screen.getByLabelText('Length overall'), '120')
+    await userEvent.type(screen.getByLabelText('Beam'), '18')
     await userEvent.type(screen.getByLabelText('Draft'), '-2')
     await userEvent.click(screen.getByRole('button', { name: 'Send estimated arrival to the terminal' }))
     expect(await screen.findByText('The draft must be more than 0')).toBeInTheDocument()
@@ -93,8 +99,37 @@ describe('PositionForm', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Send estimated arrival to the terminal' }))
 
     await screen.findByText(/This estimate was sent to the terminal/)
-    expect(calls.events[0].events[0].vessel).toMatchObject({ vesselSizeUnit: 'MTR', lengthOverall: 120, draftUnit: 'MTR', draft: 7.5 })
-    expect(calls.events[0].events[0].vessel).not.toHaveProperty('width')
+    expect(calls.events[0].events[0].vessel).toMatchObject({ vesselSizeUnit: 'MTR', lengthOverall: 120, width: 18, draftUnit: 'MTR', draft: 7.5 })
+  })
+
+  it('asks for the length and beam before the first estimate of a ship the terminal does not know', async () => {
+    const calls = recordCalls()
+    renderWithApp(<Desk />, asOperator)
+
+    await userEvent.type(screen.getByLabelText('Length overall'), '120')
+    await userEvent.click(screen.getByRole('button', { name: 'Send estimated arrival to the terminal' }))
+
+    expect(await screen.findByText('Needed the first time the terminal hears of this ship')).toBeInTheDocument()
+    expect(calls.events).toHaveLength(0)
+    // a calculation needs no size
+    await userEvent.click(screen.getByRole('button', { name: 'Calculate only' }))
+    expect(await screen.findByText(/A calculation only: nothing was sent or stored/)).toBeInTheDocument()
+  })
+
+  it('sends a ship whose size the terminal holds without asking for it again', async () => {
+    const calls = recordCalls()
+    const known = { ...makeVisits()[1].vessel, loaMeters: 129, beamMeters: 20 }
+    renderWithApp(
+      <PositionForm port={port} vesselCode="SOLVIK" visit={null} knownVessel={known} answer={null} onAnswer={() => {}} />,
+      asOperator,
+    )
+
+    expect(screen.getByLabelText('Length overall')).toHaveValue('129')
+    await userEvent.click(screen.getByRole('button', { name: 'Send estimated arrival to the terminal' }))
+
+    await waitFor(() => expect(calls.events).toHaveLength(1))
+    expect(calls.events[0].events[0].vessel).toMatchObject({ lengthOverall: 129, width: 20 })
+    expect(screen.queryByText('Needed the first time the terminal hears of this ship')).not.toBeInTheDocument()
   })
 
   it('offers a ship that already has a call a calculation first, and sending as the second choice', async () => {
@@ -119,5 +154,25 @@ describe('PositionForm', () => {
 
     expect(await screen.findByText('Latitude runs from -90 to 90')).toBeInTheDocument()
     expect(calls.eta).toHaveLength(0)
+  })
+
+  it('keeps a position that is no real place off the map while it is typed', async () => {
+    const shown = []
+    renderWithApp(
+      <PositionForm port={port} vesselCode="SOLVIK" visit={null} answer={null} onAnswer={() => {}}
+        onPositionChange={(position) => shown.push(position)} />,
+      asOperator,
+    )
+
+    await userEvent.clear(screen.getByLabelText('Latitude'))
+    await userEvent.type(screen.getByLabelText('Latitude'), '500')
+
+    // the map is told there is nothing to show, never a latitude of 500 (MapLibre throws on one)
+    expect(shown.at(-1)).toBeNull()
+    expect(shown.filter(Boolean).every((position) => position.lat >= -90 && position.lat <= 90)).toBe(true)
+
+    await userEvent.clear(screen.getByLabelText('Latitude'))
+    await userEvent.type(screen.getByLabelText('Latitude'), '61.7')
+    expect(shown.at(-1)).toEqual({ lat: 61.7, lon: 4.45 })
   })
 })

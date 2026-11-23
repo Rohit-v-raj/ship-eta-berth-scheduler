@@ -7,7 +7,7 @@ import { Anchor, Crosshair, Maximize2 } from 'lucide-react'
 import { useTheme } from '@/app/providers'
 import { Button } from '@/components/ui/controls'
 import { cn } from '@/lib/cn'
-import { bearingDeg } from '@/lib/geo'
+import { bearingDeg, isPosition } from '@/lib/geo'
 import { STANDING, standingOf, vesselLabel } from '@/lib/visit'
 
 /**
@@ -36,12 +36,14 @@ export default function PortMap({ port, visits = [], selectedRef, onSelect, pick
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
 
+  // MapLibre throws on a coordinate that is no real place, which would take the whole page down: such a point is not drawn
   const ships = useMemo(
-    () => visits.filter((v) => v.lastReport?.lat != null && v.lastReport?.lon != null && standingOf(v) !== STANDING.ALONGSIDE),
+    () => visits.filter((v) => v.lastReport && isPosition(v.lastReport.lat, v.lastReport.lon) && standingOf(v) !== STANDING.ALONGSIDE),
     [visits],
   )
+  const spot = picked && isPosition(picked.lat, picked.lon) ? picked : null
   const trackLine = useMemo(() => {
-    const points = (track ?? []).filter((r) => r.lat != null && r.lon != null).map((r) => [r.lon, r.lat])
+    const points = (track ?? []).filter((r) => isPosition(r.lat, r.lon)).map((r) => [r.lon, r.lat])
     return points.length < 2 ? null : { type: 'Feature', geometry: { type: 'LineString', coordinates: points } }
   }, [track])
 
@@ -49,7 +51,7 @@ export default function PortMap({ port, visits = [], selectedRef, onSelect, pick
   const fitAll = useCallback(
     (duration = 600) => {
       const points = [[port.longitude, port.latitude], ...ships.map((v) => [v.lastReport.lon, v.lastReport.lat])]
-      if (picked) points.push([picked.lon, picked.lat])
+      if (spot) points.push([spot.lon, spot.lat])
       if (points.length < 2) return
       const lons = points.map((p) => p[0])
       const lats = points.map((p) => p[1])
@@ -58,7 +60,7 @@ export default function PortMap({ port, visits = [], selectedRef, onSelect, pick
         { padding: 64, maxZoom: 11, duration },
       )
     },
-    [port, ships, picked],
+    [port, ships, spot],
   )
 
   // Re-frame when a ship appears or leaves, not each time one moves: the reader may have zoomed in on purpose.
@@ -114,8 +116,8 @@ export default function PortMap({ port, visits = [], selectedRef, onSelect, pick
           </Marker>
         ))}
 
-        {picked && (
-          <Marker longitude={picked.lon} latitude={picked.lat} anchor="center">
+        {spot && (
+          <Marker longitude={spot.lon} latitude={spot.lat} anchor="center">
             <Crosshair className="size-7 text-ink" strokeWidth={2.2} aria-label="Position to report" />
           </Marker>
         )}

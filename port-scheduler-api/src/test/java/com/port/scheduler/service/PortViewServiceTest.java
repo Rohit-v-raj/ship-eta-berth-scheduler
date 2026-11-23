@@ -15,6 +15,7 @@ import com.port.scheduler.model.view.VisitDetailView;
 import com.port.scheduler.model.view.VisitDetailView.EventView;
 import com.port.scheduler.model.view.VisitView;
 import com.port.scheduler.service.VesselVisitService.ReportedPosition;
+import com.port.scheduler.service.VesselVisitService.VesselSize;
 import com.port.scheduler.service.VesselVisitService.Scheduled;
 import com.port.scheduler.support.PersistenceTest;
 import org.junit.jupiter.api.Test;
@@ -57,7 +58,7 @@ class PortViewServiceTest {
         List.of("V001", "V002", "V003", "V004", "V005").forEach(this::schedule);
         // due in ten days: beyond the booking horizon, so it waits in line with no berth
         Scheduled queued = visitService.declareEta("V006", Instant.now().plus(Duration.ofDays(10)),
-                new ReportedPosition(61.50, 4.90, 8.5));
+                new ReportedPosition(61.50, 4.90, 8.5), ANY_SIZE);
 
         List<VisitView> visits = views.visits(null, false);
 
@@ -88,7 +89,7 @@ class PortViewServiceTest {
 
     @Test
     void aVisitWhoseEstimatesCarriedNoPositionHasNoLastReport() {
-        visitService.declareEta("V001", Instant.now().plus(Duration.ofHours(2)), null);
+        visitService.declareEta("V001", Instant.now().plus(Duration.ofHours(2)), null, ANY_SIZE);
 
         assertThat(views.visits("V001", false).get(0).lastReport()).isNull();
     }
@@ -133,7 +134,7 @@ class PortViewServiceTest {
 
     @Test
     void aVesselHoldingABerthPastItsAgreedTimeIsShownAsNotArrived() {
-        visitService.declareEta("V001", Instant.now().minus(Duration.ofHours(1)), null);
+        visitService.declareEta("V001", Instant.now().minus(Duration.ofHours(1)), null, ANY_SIZE);
 
         VisitView visit = views.visits("V001", false).get(0);
 
@@ -144,7 +145,7 @@ class PortViewServiceTest {
     @Test
     void aVesselFarOutIsToldWhenTheNextEstimateIsExpected() {
         Instant eta = Instant.now().plus(Duration.ofHours(100));
-        visitService.declareEta("V001", eta, null);
+        visitService.declareEta("V001", eta, null, ANY_SIZE);
 
         VisitView visit = views.visits("V001", false).get(0);
 
@@ -242,6 +243,9 @@ class PortViewServiceTest {
 
     private Scheduled schedule(String vesselId) {
         return visitService.declareEta(vesselId, Instant.now().plus(Duration.ofHours(2)),
-                new ReportedPosition(61.50, 4.90, 8.5));
+                new ReportedPosition(61.50, 4.90, 8.5), ANY_SIZE);
     }
+
+    /** A size that fits every berth: a call opens only for a vessel of known length and beam. */
+    private static final VesselSize ANY_SIZE = new VesselSize(120.0, 20.0, null);
 }

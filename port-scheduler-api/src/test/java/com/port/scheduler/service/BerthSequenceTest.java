@@ -44,6 +44,8 @@ class BerthSequenceTest {
     private static final ReportedPosition POSITION = new ReportedPosition(61.50, 4.90, 8.5);
     /** Too long for B3 and B4, so only B1 and B2 take it. */
     private static final VesselSize LARGE = new VesselSize(180.0, 28.0, 9.0);
+    /** A size that fits every berth: a call opens only for a vessel of known length and beam. */
+    private static final VesselSize ANY_SIZE = new VesselSize(120.0, 20.0, null);
 
     @Autowired VesselVisitService visitService;
     @Autowired BerthService berthService;
@@ -265,6 +267,6 @@ class BerthSequenceTest {
 
     private Scheduled scheduledIn(String vesselId, Duration sailing) {
         visitService.resolveVessel(null, null, vesselId, null);
-        return visitService.declareEta(vesselId, Instant.now().plus(sailing), POSITION);
+        return visitService.declareEta(vesselId, Instant.now().plus(sailing), POSITION, ANY_SIZE);
     }
 }

@@ -13,12 +13,12 @@ import jakarta.validation.constraints.PositiveOrZero;
  */
 public record EtaQuery(
         @NotBlank String vesselId,
-        double lat,
-        double lon,
+        @Min(-90) @Max(90) double lat,
+        @Min(-180) @Max(180) double lon,
         @PositiveOrZero double sog,
         @Min(0) @Max(360) double cog,
-        double destLat,
-        double destLon,
+        @Min(-90) @Max(90) double destLat,
+        @Min(-180) @Max(180) double destLon,
         /** Optional. Sets how slowly the vessel may be advised to sail; otherwise the type on record is used. */
         VesselType vesselType
 ) {}

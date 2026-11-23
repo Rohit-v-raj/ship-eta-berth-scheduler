@@ -110,7 +110,7 @@ project's own choices, set in `application.properties`.
 | `portCallServiceTypeCode` `BERTH`, event type `ARRI` / `DEPA`, phase `INBD` / `OUTB`, facility `BRTH` | Same codes. Only the `BERTH` service is acted on; others are answered "not processed" |
 | `vessel.vesselIMONumber`, `vesselMMSINumber`, `vesselName`, `vesselTypeCode` | A vessel is matched by IMO number, then MMSI, then name |
 | `vessel.vesselPosition`, `vessel.milesToDestinationPort` (optional) | Read from an `EST`. This is how the terminal learns where a ship is |
-| `vessel.lengthOverall`, `width` in `vesselSizeUnit`; `draft` in `draftUnit` (optional) | Read from an `EST`, in metres or feet. A ship is given only a berth it fits, and refused if it fits none (step 17) |
+| `vessel.lengthOverall`, `width` in `vesselSizeUnit`; `draft` in `draftUnit` (optional in the standard) | Read from an `EST`, in metres or feet. **Length and beam are required here once per ship**: a call opens only for a ship the terminal knows the size of, and they stay on the vessel record. The draft is per call, due a day before arrival. A ship is given only a berth it fits, and refused if it fits none (step 17) |
 | `portCall.isOmitted` / `terminalCall.isOmitted` ("omitted by the carrier") | Read: it cancels the call. Published on every event of such a call |
 | `portCallService.isCanceled` ("canceled by the service provider") | Published on every event of a call the terminal cancelled (step 13). Not read: here the terminal is the provider |
 | `feedbackElements` with `severity`, `message`, `propertyPath` | Same. A refused event is reported by its position, `$.events[0]` |
@@ -257,7 +257,11 @@ Start from an empty port (section 11 shows how to reset one).
 
 The answers below were captured in one run on 23 Nov 2026, on the scheduler
 with its production settings. Steps 20, 21 and 22 each start again from an
-empty port.
+empty port. Later that day the terminal began to require each ship's length
+and beam with its first estimate, so every first estimate below carries them
+(120 m and 20 m, which fit every berth). The walk-through was replayed in full
+with the sizes: every berth, time and move came out the same; what changed is
+the size fields in the answers, `draftDueSince`, and step 17's first refusal.
 
 ### Step 1 — The model service on its own
 
@@ -337,7 +341,8 @@ how it arrives at that figure is its own affair. This endpoint is the "how".
 
 ### Step 4 — Open the call: an estimated arrival (`PortCallEventsController`, `POST`)
 
-The operator sends the estimate to the terminal, with the ship's position:
+The operator sends the estimate to the terminal, with the ship's position and
+size:
 
 ```bash
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
@@ -346,7 +351,8 @@ curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
     "vesselName":"NORDVIK",
     "vesselTypeCode":"GCGO",
     "vesselPosition":{"geoCoordinate":{"latitude":"61.62","longitude":"4.40"}},
-    "milesToDestinationPort":$MILES
+    "milesToDestinationPort":$MILES,
+    "vesselSizeUnit":"MTR","lengthOverall":120,"width":20
   },
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
   "timestamp":{"classifierCode":"EST","serviceDateTime":"$ETA"}
@@ -361,11 +367,16 @@ EOF
 nothing to report. Behind it the terminal opened a visit, booked the first
 free berth, and recorded its own answer, a requested arrival.
 
+The length overall and beam are required the first time the terminal hears of
+a ship: a berth is given only to a ship known to fit it. They stay on the
+vessel record, so NORDVIK's later calls need not repeat them. Without them the
+estimate is refused (step 17).
+
 **DCSA:** this is the standard's `POST /events`. An `EST` for service `BERTH`,
 event `ARRI`, is "estimated time of arrival at berth", sent by the vessel
-operator. `vesselPosition` and `milesToDestinationPort` are the standard's own
-optional fields; the coordinates are text, as it specifies. `GCGO` is its code
-for general cargo.
+operator. `vesselPosition`, `milesToDestinationPort` and the size fields are
+the standard's own optional fields; the coordinates are text, as it specifies.
+`GCGO` is its code for general cargo.
 
 ### Step 5 — See where the ship stands (`ConsoleController`)
 
@@ -374,7 +385,7 @@ curl -s "$API/api/visits?vessel=NORDVIK"
 ```
 ```json
 [{"visitRef":"VV-20261123-10D5EF29",
-  "vessel":{"code":"NORDVIK","name":"NORDVIK","imoNumber":null,"mmsi":null,"type":"GENERAL_CARGO","loaMeters":null,"beamMeters":null},
+  "vessel":{"code":"NORDVIK","name":"NORDVIK","imoNumber":null,"mmsi":null,"type":"GENERAL_CARGO","loaMeters":120.00,"beamMeters":20.00},
   "phase":"INBOUND","terminalCode":"FRO-CT",
   "berth":{"berthCode":"B1","berthName":"Berth 1","status":"PLANNED",
            "plannedStart":"2026-11-23T10:05:02.980252Z","plannedEnd":"2026-11-24T09:22:02.980252Z","actualStart":null,"actualEnd":null},
@@ -383,7 +394,8 @@ curl -s "$API/api/visits?vessel=NORDVIK"
   "plannedServiceMinutes":1397,
   "lastReport":{"reportedAt":"2026-11-23T06:18:09.377456Z","lat":61.62,"lon":4.4,"distanceNm":19.13,"estimatedArrival":"2026-11-23T10:05:02.980252Z"},
   "requestedAt":"2026-11-23T06:18:09.398411Z","answerDueAt":"2026-11-23T07:18:09.398411Z","cancelledBy":null,"remarks":null,
-  "estimateDueSince":null,"nextEstimateBy":null,"notArrivedSince":null,"arrivalDraftMeters":null,"overstayingSince":null}]
+  "estimateDueSince":null,"nextEstimateBy":null,"notArrivedSince":null,"arrivalDraftMeters":null,"overstayingSince":null,
+  "draftDueSince":"2026-11-22T10:05:02.980252Z"}]
 ```
 
 **What to notice.**
@@ -397,13 +409,17 @@ curl -s "$API/api/visits?vessel=NORDVIK"
 - `ptaBerth` is empty: the ship has not accepted yet.
 - `requestedAt` is when the terminal issued that request, and `answerDueAt` is
   60 minutes later: when the ship's answer is expected by.
-- The last five fields are empty for now. `estimateDueSince` and
-  `nextEstimateBy` say when the terminal expects a fresh estimate: ports ask
-  for one 72, 48 and 24 hours before arrival, and NORDVIK is closer than that.
-  `notArrivedSince` is set once a booked ship is past its agreed time without
-  arriving, and `overstayingSince` once a ship alongside is past its planned
-  end (step 22). `arrivalDraftMeters` and the vessel's `loaMeters` and
-  `beamMeters` are its size, when it gives one (step 17).
+- `estimateDueSince` and `nextEstimateBy` say when the terminal expects a
+  fresh estimate: ports ask for one 72, 48 and 24 hours before arrival, and
+  NORDVIK is closer than that. `notArrivedSince` is set once a booked ship is
+  past its agreed time without arriving, and `overstayingSince` once a ship
+  alongside is past its planned end (step 22).
+- The vessel's `loaMeters` and `beamMeters` are the size sent in step 4.
+  `arrivalDraftMeters` is the draft for this call, which NORDVIK has not given.
+  A draft is due a day before arrival (`port.planning.draft-due-hours`, 24),
+  and NORDVIK arrives within the day, so `draftDueSince` is set: the console
+  shows "Draft due". Until a draft comes, the largest the ship has ever
+  declared is used to check the fit.
 - `plannedEnd` is 1,397 minutes (0.97 days) after the start: the typical stay
   for this vessel type, from published UNCTAD medians.
 - `lastReport` is the position sent in step 4.
@@ -498,7 +514,7 @@ for SHIP in "SELJE 2" "ULSTEIN 3" "VARTDAL 4"; do
   WHEN=$(date -u -d "+$2 hours" +%Y-%m-%dT%H:%M:%SZ)
   curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{
-  "vessel":{"vesselName":"$1","vesselTypeCode":"GCGO"},
+  "vessel":{"vesselName":"$1","vesselTypeCode":"GCGO","vesselSizeUnit":"MTR","lengthOverall":120,"width":20},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
   "timestamp":{"classifierCode":"EST","serviceDateTime":"$WHEN"}
 }]}
@@ -537,7 +553,8 @@ ETA=$(echo "$ANSWER" | pick "d['estimatedArrival']"); MILES=$(echo "$ANSWER" | p
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
 {"events":[{
   "vessel":{"vesselName":"HAREID","vesselTypeCode":"GCGO",
-            "vesselPosition":{"geoCoordinate":{"latitude":"62.60","longitude":"5.40"}},"milesToDestinationPort":$MILES},
+            "vesselPosition":{"geoCoordinate":{"latitude":"62.60","longitude":"5.40"}},"milesToDestinationPort":$MILES,
+            "vesselSizeUnit":"MTR","lengthOverall":120,"width":20},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
   "timestamp":{"classifierCode":"EST","serviceDateTime":"$ETA"}
 }]}
@@ -911,8 +928,8 @@ ended it:
 
 A ship's size travels in the estimate, in the standard's own optional fields:
 `lengthOverall` and `width` (the beam) in `vesselSizeUnit`, and `draft` in
-`draftUnit`, either metres (`MTR`) or feet (`FOT`). The terminal gives a ship
-only a berth it fits. Here `B1` and `B2` take 190 m, a 32 m beam and a 10.5 m
+`draftUnit`, either metres (`MTR`) or feet (`FOT`). The terminal requires the
+length and beam once per ship, and gives a ship only a berth it fits. Here `B1` and `B2` take 190 m, a 32 m beam and a 10.5 m
 draft; `B3` and `B4` take 140 m, 24 m and 7.5 m.
 
 A ship too big for every berth:
@@ -934,8 +951,18 @@ EOF
 No call is opened: a ship that fits nowhere is not left waiting for a berth
 that will never take it.
 
-Now three ships. ALDA gives no size and is due in two hours. LANGE is 180 m
-long with a 9 m draft, due in an hour; KORT is 120 m, also due in an hour, and
+A ship the terminal has never heard of, with no size: ALDA, due in two hours,
+sends only its name and time.
+
+```json
+{"feedbackElements":[{"severity":"ERROR","message":"The terminal holds no length overall or beam for ALDA; send lengthOverall and width (in vesselSizeUnit) with its estimate. A berth is given only to a vessel known to fit it","propertyPath":"$.events[0]"}]}
+```
+
+No call is opened and no vessel record is left behind. A length without a beam
+is refused the same way, naming the beam.
+
+Now three ships. ALDA sends again, 120 m with a 20 m beam. LANGE is 180 m long
+with a 9 m draft, due in an hour; KORT is 120 m, also due in an hour, and
 reports after LANGE. (Send each as above, with its own name, time and size.)
 
 ```bash
@@ -952,19 +979,20 @@ curl -s "$API/api/visits?vessel=LANGE"
 
 | Ship | Size | Got |
 |---|---|---|
-| ALDA | not given | `B3`, at its own estimate |
+| ALDA | 120 m, beam 20 m, no draft | `B3`, at its own estimate |
 | LANGE | 180 m, draft 9 m | `B2`, at its own estimate |
 | KORT | 120 m, draft 6.5 m | `B4`, at its own estimate |
 
 **What to notice.** LANGE fits only `B1` and `B2`. `B1` is booked for HAREID
 from `16:40`, and the nine hours before that are too short for LANGE's stay,
-so LANGE takes `B2`. ALDA, of unknown size, took `B3`: `B2` was in its hour
-of turnaround after SELJE, and of berths a ship can start on equally soon, the
-one whose last ship left first wins. A ship of unknown size is assumed to fit;
-nothing can be checked against a size the terminal has not been told.
+so LANGE takes `B2`. ALDA took `B3`: `B2` was in its hour of turnaround after
+SELJE, and of berths a ship can start on equally soon, the one whose last ship
+left first wins. ALDA gave no draft, so the largest it has ever declared would
+be used; it has declared none, so only its length and beam are checked.
 
 **DCSA:** the size fields are the standard's own, optional, on the vessel of
-any event. A unit other than `MTR` or `FOT` is refused with `ERROR`
+any event. The terminal requires the length and beam once per ship (section
+12). A unit other than `MTR` or `FOT` is refused with `ERROR`
 ("vesselSizeUnit must be MTR or FOT").
 
 ### Step 18 — Maintenance on a berth (`ConsoleController`)
@@ -1108,7 +1136,7 @@ was alongside at that time, and then tries five things.
 ```bash
 T0=$(date -u -d '-3 hours' +%Y-%m-%dT%H:%M:%SZ)
 for C in EST ACT; do curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
-{"events":[{"vessel":{"vesselName":"SVANOY"},
+{"events":[{"vessel":{"vesselName":"SVANOY","vesselSizeUnit":"MTR","lengthOverall":120,"width":20},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
   "timestamp":{"classifierCode":"$C","serviceDateTime":"$T0"}}]}
 EOF
@@ -1178,7 +1206,7 @@ berth free:
 
 ```bash
 curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
-{"events":[{"vessel":{"vesselName":"FEDJE"},
+{"events":[{"vessel":{"vesselName":"FEDJE","vesselSizeUnit":"MTR","lengthOverall":120,"width":20},
   "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"ARRI","facilityTypeCode":"BRTH"},
   "timestamp":{"classifierCode":"EST","serviceDateTime":"2027-01-22T06:18:24Z"}}]}
 EOF
@@ -1329,6 +1357,7 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `PUT /api/visits/{visitRef}/cancel` for a ship alongside, or a visit already over | `409`, saying which |
 | `PUT /api/visits/VV-NOT-THERE/cancel` | `404` |
 | `POST` an estimate for a ship that fits no berth | `200`, `ERROR`: `No berth here takes …`, with its size and the largest berth's limits. No call is opened |
+| `POST` the first estimate of a ship whose length overall or beam the terminal does not hold | `200`, `ERROR`: `The terminal holds no length overall or beam for …`, naming what is missing. No call is opened and no vessel record is left |
 | `POST` a size in a unit other than `MTR` or `FOT` | `200`, `ERROR`: `vesselSizeUnit must be MTR or FOT` |
 | `POST /api/port/berths/{code}/maintenance` over the stay of the ship alongside, or over another window | `409`, saying which. Over a booked ship's window it is accepted, and the ship is planned again (step 18) |
 | `PUT /api/port/berths/{code}/release` for a berth with no ship alongside, even one with bookings | `200`, `"released":false`; nothing is recorded |
@@ -1340,6 +1369,7 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `PUT /api/visits/{visitRef}/expected-completion` for a ship not alongside | `409`, `Vessel … is not alongside; …` |
 | `GET /api/port/berth-plan` with `from` after `to`, or a malformed time | `400`, `from must be before to` or `The value of 'from' could not be read` |
 | `POST /api/operator/eta` with a negative speed or no `vesselId` | `400`, before the model is asked, e.g. `vesselId: must not be blank` |
+| `POST /api/operator/eta` with a latitude outside -90 to 90 or a longitude outside -180 to 180 (the ship's or the destination's) | `400`, naming it, e.g. `lat: must be less than or equal to 90` |
 | `POST /api/operator/eta` while the model service is down or does not answer | `503`, `The ETA model service is not answering; try again shortly`, at once if it is down and after 10 seconds if it is hung |
 | `POST` an omitted call, an estimate, or a departure the call's state does not allow | `200`, `ERROR`, saying why (step 20) |
 | `POST` an event naming another port | `200`, `ERROR`: `This terminal is at NOFRO; the event is for …` |
@@ -1411,7 +1441,7 @@ sent, so you can compare it with this guide.
 | Step 12 | **Harbour**: open the visit of a ship alongside, *Release berth* |
 | Step 13 | **Harbour**: a late answer shows as "No answer for ..." in the arrivals table and in the *Awaiting the ship's answer* figure. Open the visit of a ship that has not arrived, *Cancel this call*. The ship's own page then says the terminal cancelled it |
 | Steps 6, 16 | **Port call events** |
-| Step 17 | **My vessel**: the calculator's optional *Ship's size* fields travel with the estimate. A visit's drawer shows the size, or "size unknown" |
+| Steps 5, 17 | **My vessel**: the calculator's *Ship's size* fields travel with the estimate; length and beam are asked for the first time a ship is sent, and filled in after that. On **Harbour**, a ship due within a day with no draft shows "Draft due", and its drawer shows the size |
 | Step 18 | **Harbour**: the *Berth maintenance* panel schedules and removes windows; the berth plan draws them hatched, and a berth under maintenance now says "maint. to …" |
 | Step 19 | **Stories**: *A ship falls behind*. The ledger in the visit drawer gives the reason |
 | Step 20 | **My vessel**: *Omit this call* and *Propose another time* are not offered once the ship is alongside, and *Report departure* only then; a refusal from the scheduler appears beside the button |
@@ -1425,7 +1455,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 136 tests in twelve classes; needs MySQL, not FastAPI
+.\gradlew test          # 143 tests in thirteen classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
@@ -1438,11 +1468,12 @@ cd port-scheduler-api
 | `PortViewServiceTest`, `BerthSchedulingTest` | The views and the scheduling rules through real MySQL: booked ships' times refreshed, the answer and the estimate that are due, the terminal's cancellation, berth fit, maintenance, a booked ship that falls behind, overstays |
 | `BerthSequenceTest` | Several ships per berth: the gap before a booking, a booking that moves to a berth much sooner, maintenance over a booked ship, an arrival at an occupied berth |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production |
+| `VesselSizeTest` | Length and beam required once per ship, kept for later calls; the largest draft kept and used; the draft due a day before arrival |
 | `PlanningRulesTest`, `SchemaMigrationTest` | The stay and speed arithmetic; the migrations and the database's own rules |
 
 ```powershell
 cd port-console
-npm test                # 73 tests; nothing else needs to be running
+npm test                # 80 tests; nothing else needs to be running
 npm run lint
 ```
 
@@ -1495,6 +1526,11 @@ not been run through DCSA's conformance tests.
 
 - **Only the berth service is acted on.** Pilotage, towage, cargo operations
   and moves forecasts are answered "not processed".
+- **A ship's length and beam are required, once per ship**, where the
+  standard leaves them optional: a call opens only for a ship the terminal
+  knows the size of. A terminal operating system holds these as vessel master
+  data; here they arrive with the first estimate and stay on the vessel
+  record.
 - **One record is both the port call and the terminal call.** The standard
   allows several terminal calls within one port call.
 - **No facility codes.** The demo terminal codes are invented, so no SMDG code

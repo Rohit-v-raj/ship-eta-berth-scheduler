@@ -272,7 +272,7 @@ erDiagram
 <tr><td>Java: request and response shapes</td><td><code>model/</code> EtaQuery, EtaEstimate, EtaRequest, EtaResponse; <code>model/view/</code> PortView, VisitView, VisitDetailView, BerthPlanView</td><td>The JSON of our own endpoints.</td></tr>
 <tr><td>Java: errors</td><td><code>exceptions/</code> GlobalExceptionHandler, BerthNotFound, VisitNotFound, VisitConflict</td><td>404 and 409 responses.</td></tr>
 <tr><td>Database schema</td><td><code>resources/db/migration/V1</code> to <code>V9</code></td><td>Topology, vessel, visit tables, demo port, IMO width, planned service time, who cancelled a call, berth maintenance.</td></tr>
-<tr><td>Tests</td><td><code>src/test/</code>, 12 classes, 136 tests; <code>port-console/</code>, 73 tests</td><td>Java: migrations, scheduling flow, planning rules, the read views, each controller's JSON, DCSA publishing and receiving. Console: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts.</td></tr>
+<tr><td>Tests</td><td><code>src/test/</code>, 13 classes, 143 tests; <code>port-console/</code>, 80 tests</td><td>Java: migrations, scheduling flow, planning rules, the read views, each controller's JSON, DCSA publishing and receiving. Console: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts.</td></tr>
 </table></div>
 <p class="note">Java paths are under <code>port-scheduler-api/src/main/java/com/port/scheduler/</code>.</p>
 
@@ -282,7 +282,7 @@ erDiagram
 <tr><td>ETA model and its service</td><td class="ok">Working</td><td>XGBoost, 69 min mean error on unseen vessels. Its label counts idle time near the berth as sailing, which makes it pessimistic close to port.</td></tr>
 <tr><td>Persistence and data model</td><td class="ok">Working</td><td>10 tables, state survives a restart.</td></tr>
 <tr><td>Berth plan</td><td class="ok">Working</td><td>Each berth holds a sequence of bookings across the week; a ship due soon uses the gap before a booking without delaying it. A booking moves to a berth that can take it more than 4 hours sooner. Ships due beyond 7 days wait in a queue with no berth. Times are worked out again whenever the plan changes.</td></tr>
-<tr><td>Berth fit and maintenance</td><td class="ok">Working</td><td>A ship is given only a berth its length, beam and draft fit, and refused if it fits none. Maintenance windows are recorded in advance and planned around.</td></tr>
+<tr><td>Berth fit and maintenance</td><td class="ok">Working</td><td>A ship's length and beam are required once, with its first estimate; its draft per call is due a day before arrival. A ship is given only a berth its length, beam and draft fit, and refused if it fits none. Maintenance windows are recorded in advance and planned around.</td></tr>
 <tr><td>Late booked ships</td><td class="ok">Working</td><td>A ship holding a booking that falls more than 4 hours behind its agreed time gives its place up, if another ship can be alongside on that berth sooner; it is planned again at once.</td></tr>
 <tr><td>Overstays</td><td class="ok">Working</td><td>A ship past its planned end is taken to be still there and is flagged; the planner sets when it is expected to leave. An hour is kept between ships.</td></tr>
 <tr><td>Unanswered requests</td><td class="ok">Working</td><td>A berth is held from the terminal's answer. A reply 60 minutes late is flagged on the planner's screen, and the planner can cancel the call. Nothing is cancelled automatically.</td></tr>

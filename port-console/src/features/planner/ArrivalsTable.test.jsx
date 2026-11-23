@@ -38,13 +38,18 @@ describe('ArrivalsTable', () => {
     const now = Date.now()
     const [alongside, reserved, waiting] = makeVisits(now)
     const late = { ...reserved, notArrivedSince: new Date(now - 40 * 60_000).toISOString() }
-    const quiet = { ...waiting, estimateDueSince: new Date(now - 2 * 3_600_000).toISOString() }
+    const quiet = {
+      ...waiting,
+      estimateDueSince: new Date(now - 2 * 3_600_000).toISOString(),
+      draftDueSince: new Date(now - 3_600_000).toISOString(),
+    }
     renderWithApp(<ArrivalsTable visits={[alongside, late, quiet]} onSelect={() => {}} />)
 
     const row = (name) => screen.getByRole('button', { name }).closest('tr')
     expect(within(row('SOLVIK')).getByText('Not arrived, 40 min past agreed time')).toBeInTheDocument()
     expect(within(row('HAVBRIS')).getByText('Estimate due')).toBeInTheDocument()
-    expect(within(row('KINN')).queryByText(/Not arrived|Estimate due/)).not.toBeInTheDocument()
+    expect(within(row('HAVBRIS')).getByText('Draft due')).toBeInTheDocument()
+    expect(within(row('KINN')).queryByText(/Not arrived|Estimate due|Draft due/)).not.toBeInTheDocument()
   })
 
   it('opens a visit from its vessel name', async () => {

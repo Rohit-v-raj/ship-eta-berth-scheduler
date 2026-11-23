@@ -80,9 +80,12 @@ button; whether to cancel is left to the planner.
 
 If the terminal cancels the call, this page says so, with the reason, instead
 of going blank. It also says by when the terminal expects the next estimate.
-The calculator has optional fields for the ship's size (length overall, beam,
-draft); they travel with the estimate, and the terminal gives the ship only a
-berth it fits.
+The calculator has fields for the ship's size (length overall, beam, draft);
+they travel with the estimate, and the terminal gives the ship only a berth it
+fits. Length and beam are asked for the first time a ship is sent to the
+terminal, and filled in from the record after that; *Calculate only* needs no
+size. The draft is for this call; the planner's screens flag "Draft due" a day
+before arrival while none has been sent.
 
 **Stories** play the conversation step by step. A story is a list of real
 requests, not a simulation: each step sends one request to the scheduler and
@@ -223,7 +226,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 73 tests
+npm test             # 80 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

@@ -110,6 +110,21 @@ class VesselOperatorControllerTest {
     }
 
     @Test
+    void aPositionThatIsNoRealPlaceIsRefusedSayingWhichPart() throws Exception {
+        mvc.perform(post("/api/operator/eta").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"vesselId\":\"V001\",\"lat\":500,\"lon\":4.9,\"sog\":12,\"cog\":45.0,"
+                                + "\"destLat\":61.612,\"destLon\":5.07}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("lat: must be less than or equal to 90"));
+        mvc.perform(post("/api/operator/eta").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"vesselId\":\"V001\",\"lat\":61.5,\"lon\":4.9,\"sog\":12,\"cog\":45.0,"
+                                + "\"destLat\":61.612,\"destLon\":-200}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("destLon: must be greater than or equal to -180"));
+        verifyNoInteractions(etaService, views);
+    }
+
+    @Test
     void theOperatorsAnswersAreNotRoutesHere() throws Exception {
         // accept, another time and omit are sent as DCSA events to /api/port-call/v2/events
         for (String decision : new String[] {"accept", "reject", "omit"}) {
@@ -123,6 +138,6 @@ class VesselOperatorControllerTest {
         return new VisitView("VV-20261013-AB12CD34",
                 new VesselView("V001", null, null, null, VesselType.GENERAL_CARGO, null, null),
                 actualArrival == null ? VisitPhase.INBOUND : VisitPhase.BERTHED, null, null, 1,
-                null, requestedArrival, null, actualArrival, null, 1397, null, null, null, null, null, null, null, null, null, null);
+                null, requestedArrival, null, actualArrival, null, 1397, null, null, null, null, null, null, null, null, null, null, null);
     }
 }
