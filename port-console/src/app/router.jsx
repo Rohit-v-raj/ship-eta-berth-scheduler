@@ -7,6 +7,7 @@ import { HOME } from '@/session/permissions'
 import { RequireRole } from '@/session/RequireRole'
 import { useSession } from '@/session/session'
 import { AppShell } from './AppShell'
+import { RouteError } from './RouteError'
 
 /** Each role lands on its own page. */
 function Home() {
@@ -23,12 +24,18 @@ export const routes = [
     path: '/',
     element: <AppShell />,
     children: [
-      { index: true, element: <Home /> },
-      { path: 'planner', element: <RequireRole action="plan.view"><HarbourPage /></RequireRole> },
-      { path: 'operator', element: <RequireRole action="vessel.view"><OperatorPage /></RequireRole> },
-      { path: 'operator/:vesselId', element: <RequireRole action="vessel.view"><OperatorPage /></RequireRole> },
-      { path: 'events', element: <RequireRole action="events.view"><EventsPage /></RequireRole> },
-      { path: '*', element: <Notice title="There is no such page" className="mt-20">Use the tabs above to find your way.</Notice> },
+      {
+        // a page that fails to draw is replaced by a notice; the header and the other pages keep working
+        errorElement: <RouteError />,
+        children: [
+          { index: true, element: <Home /> },
+          { path: 'planner', element: <RequireRole action="plan.view"><HarbourPage /></RequireRole> },
+          { path: 'operator', element: <RequireRole action="vessel.view"><OperatorPage /></RequireRole> },
+          { path: 'operator/:vesselId', element: <RequireRole action="vessel.view"><OperatorPage /></RequireRole> },
+          { path: 'events', element: <RequireRole action="events.view"><EventsPage /></RequireRole> },
+          { path: '*', element: <Notice title="There is no such page" className="mt-20">Use the tabs above to find your way.</Notice> },
+        ],
+      },
     ],
   },
 ]

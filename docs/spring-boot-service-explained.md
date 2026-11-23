@@ -133,7 +133,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 136 tests in twelve classes (§10)
+    └── test/java/com/port/scheduler/        # 143 tests in thirteen classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -591,9 +591,16 @@ Key ideas:
   they are stored against the visit (`eta_prediction`, source
   `VESSEL_DECLARED`), which is how the console's map knows where ships are.
 - **A ship is given only a berth it fits.** `BerthFit` compares its length
-  overall, beam and draft (the draft declared for the call, else its maximum)
-  with the berth's limits. A size the terminal has not been told passes. A ship
-  that fits no berth in service is refused before a call is opened. Vessel type
+  overall, beam and draft (the draft declared for the call, else the largest
+  the ship has declared, kept as `vessel.max_draft_m`) with the berth's limits.
+  **Length and beam are required once per ship**: `declareEta` opens a call
+  only for a vessel whose length and beam it holds, from this estimate or an
+  earlier one, and the DCSA receiver checks it first
+  (`VesselVisitService.checkSizeKnown`), so a refused event leaves no vessel
+  record. A draft unknown altogether is not checked. The call's draft is due a
+  day before arrival (`port.planning.draft-due-hours`, 24;
+  `VisitView.draftDueSince`). A ship that fits no berth in service is refused
+  before a call is opened. Vessel type
   against terminal type is not checked yet.
 - **Maintenance is planned around.** `scheduleMaintenance` refuses a window
   over the stay of the ship alongside or over another window. A booking the
@@ -827,7 +834,7 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 136 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 143 tests):
 
 | Test class | What it proves |
 |---|---|
@@ -840,6 +847,7 @@ The same behaviour is covered by automated tests (`.\gradlew test`, 136 tests):
 | `PlanningRulesTest` | The stay and speed arithmetic |
 | `EtaServiceTest` | The model service client gives up in time when the service is down or accepts and never answers |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production (the other scheduling tests run without it so their times stay plain sums) |
+| `VesselSizeTest` | Length and beam required once per ship and kept on record; the largest draft kept and used for the fit; the draft due a day before arrival |
 | `BerthSequenceTest` | Several ships per berth: the gap before a booking used without delaying it, a booking held up behind an overstay moving to a berth more than 4 hours sooner or staying, a ship moved for maintenance keeping its claim, a late ship giving its place to the one behind, arrivals at an occupied berth and ahead of turn |
 
 The ones that touch the database need MySQL running. They use a separate

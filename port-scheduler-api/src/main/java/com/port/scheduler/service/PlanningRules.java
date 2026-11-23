@@ -2,6 +2,7 @@ package com.port.scheduler.service;
 
 import com.port.scheduler.entity.vessel.VesselType;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -90,6 +91,20 @@ public final class PlanningRules {
             }
         }
         return due != null && (lastEstimate == null || lastEstimate.isBefore(due)) ? due : null;
+    }
+
+    /**
+     * When a call's arrival draft fell due: {@code before} ahead of the
+     * arrival, once that has passed with no draft declared for the call. Null
+     * when none is owed. Ports want the draft in the pre-arrival notice; until
+     * it comes, the vessel's largest known draft is used to check the fit.
+     */
+    public static Instant draftDueSince(Instant arrival, BigDecimal draft, Instant now, Duration before) {
+        if (arrival == null || draft != null) {
+            return null;
+        }
+        Instant due = arrival.minus(before);
+        return due.isAfter(now) ? null : due;
     }
 
     /** The next milestone before the arrival that is still ahead; null when none is left. */

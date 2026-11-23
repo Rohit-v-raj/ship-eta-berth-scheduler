@@ -102,6 +102,8 @@ public class PortCallEventReceiver {
                 }
                 ReportedPosition position = position(vessel);
                 VesselSize size = size(vessel);
+                // before the vessel is looked up, so an estimate refused for want of a size leaves no record
+                visits.checkSizeKnown(vessel.vesselIMONumber(), vessel.vesselMMSINumber(), vessel.vesselName(), size);
                 visits.declareEta(vesselId(vessel), timestamp.serviceDateTime(), position, size);
             }
             case "PLN" -> {

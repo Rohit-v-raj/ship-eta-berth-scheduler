@@ -50,7 +50,9 @@ public record VisitView(
         /** The draft declared for this call, in metres; null if none was given. */
         BigDecimal arrivalDraftMeters,
         /** For a vessel alongside: its berth's planned end, once that has passed with the vessel still there. */
-        Instant overstayingSince
+        Instant overstayingSince,
+        /** For a vessel under way: when its arrival draft fell due (24 h before arrival), while none is declared. */
+        Instant draftDueSince
 ) {
 
     /** A vessel's identity and size. A size is null when the terminal has not been told it. */
