@@ -147,6 +147,7 @@ function VesselDesk({ port, vesselCode }) {
                 port={port}
                 vesselCode={vesselCode}
                 visit={visit}
+                knownVessel={visit?.vessel ?? lastCall?.vessel ?? null}
                 picked={picked}
                 onPositionChange={onPositionChange}
                 answer={answer}

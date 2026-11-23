@@ -33,8 +33,9 @@ import static org.assertj.core.api.Assertions.tuple;
 class PortCallEventReceiverTest {
 
     private static final Instant ETA = Instant.now().plus(Duration.ofHours(6)).truncatedTo(ChronoUnit.SECONDS);
+    /** A ship that gives its length and beam, as a call opens only for a vessel of known size. */
     private static final PortCallMessages.Vessel SHIP = new PortCallMessages.Vessel(
-            "9321483", null, "King of the Seas", null, "CONT", null, null, null, null, null, null, null, null);
+            "9321483", null, "King of the Seas", null, "CONT", null, null, "MTR", 120.0, 20.0, null, null, null);
 
     @Autowired PortCallEventReceiver receiver;
     @Autowired PortCallEventPublisher publisher;
@@ -223,6 +224,25 @@ class PortCallEventReceiverTest {
     }
 
     @Test
+    void aFirstEstimateWithoutTheShipsLengthAndBeamIsRefusedAndLeavesNoRecord() {
+        long vesselsBefore = vessels.count();
+        PortCallMessages.Vessel unsized = new PortCallMessages.Vessel("9876543", null, "No Size", null, "CONT",
+                null, null, null, null, null, null, null, null);
+        PortCallMessages.Vessel lengthOnly = new PortCallMessages.Vessel("9876543", null, "No Size", null, "CONT",
+                null, null, "MTR", 150.0, null, null, null, null);
+
+        List<FeedbackElement> feedback = receiver.receive(List.of(estimateFor(unsized), estimateFor(lengthOnly)));
+
+        assertThat(feedback).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
+                tuple("ERROR", "The terminal holds no length overall or beam for IMO9876543; send lengthOverall"
+                        + " and width (in vesselSizeUnit) with its estimate. A berth is given only to a vessel known to fit it"),
+                tuple("ERROR", "The terminal holds no beam for IMO9876543; send width (in vesselSizeUnit) with its"
+                        + " estimate. A berth is given only to a vessel known to fit it"));
+        assertThat(vessels.count()).isEqualTo(vesselsBefore);
+        assertThat(visits.findAll()).isEmpty();
+    }
+
+    @Test
     void aSizeGivenWithAnEstimateIsKeptInMetresAndAVesselThatFitsNoBerthIsRefused() {
         PortCallMessages.Vessel inFeet = new PortCallMessages.Vessel("9321483", null, "King of the Seas", null, "CONT",
                 null, null, "FOT", 400.0, 60.0, "MTR", null, 8.5);
@@ -247,7 +267,7 @@ class PortCallEventReceiverTest {
 
     private static PortCallMessages.Vessel named(String imoNumber, String mmsi, String name) {
         return new PortCallMessages.Vessel(imoNumber, mmsi, name, null, "CONT",
-                null, null, null, null, null, null, null, null);
+                null, null, "MTR", 120.0, 20.0, null, null, null);
     }
 
     private static Event estimateFor(PortCallMessages.Vessel vessel) {
@@ -268,7 +288,7 @@ class PortCallEventReceiverTest {
         PortCallMessages.Vessel reporting = new PortCallMessages.Vessel(
                 "9321483", null, "King of the Seas", null, "CONT",
                 new Location(null, null, new GeoCoordinate(latitude, longitude)), milesToGo,
-                null, null, null, null, null, null);
+                "MTR", 120.0, 20.0, null, null, null);
         return new Event(null, null, null, null, null,
                 new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), reporting,
                 new Timestamp("EST", ETA, null));

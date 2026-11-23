@@ -71,6 +71,7 @@ public class PortViewService {
     private final BerthMaintenanceRepository maintenanceRepository;
     private final Duration answerWindow;
     private final List<Duration> estimateMilestones;
+    private final Duration draftDue;
 
     public PortViewService(PortRepository portRepository,
                            BerthRepository berthRepository,
@@ -80,8 +81,10 @@ public class PortViewService {
                            VisitEventRepository eventRepository,
                            BerthMaintenanceRepository maintenanceRepository,
                            @Value("${port.planning.answer-window-minutes:60}") long answerWindowMinutes,
-                           @Value("${port.planning.estimate-milestones-hours:72,48,24}") List<Long> milestoneHours) {
+                           @Value("${port.planning.estimate-milestones-hours:72,48,24}") List<Long> milestoneHours,
+                           @Value("${port.planning.draft-due-hours:24}") long draftDueHours) {
         this.answerWindow = Duration.ofMinutes(answerWindowMinutes);
+        this.draftDue = Duration.ofHours(draftDueHours);
         this.estimateMilestones = milestoneHours.stream().map(Duration::ofHours).toList();
         this.maintenanceRepository = maintenanceRepository;
         this.portRepository = portRepository;
@@ -223,7 +226,8 @@ public class PortViewService {
                 underWay ? PlanningRules.nextEstimateBy(arrival, now, estimateMilestones) : null,
                 booked && agreed != null && agreed.isBefore(now) ? agreed : null,
                 visit.getArrivalDraftMeters(),
-                alongside && allocation.getPlannedEnd().isBefore(now) ? allocation.getPlannedEnd() : null);
+                alongside && allocation.getPlannedEnd().isBefore(now) ? allocation.getPlannedEnd() : null,
+                underWay ? PlanningRules.draftDueSince(arrival, visit.getArrivalDraftMeters(), now, draftDue) : null);
     }
 
     private static Instant firstOf(Instant... times) {

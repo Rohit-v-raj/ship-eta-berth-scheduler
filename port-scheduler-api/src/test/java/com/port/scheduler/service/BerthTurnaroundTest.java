@@ -11,6 +11,7 @@ import com.port.scheduler.repository.VesselVisitRepository;
 import com.port.scheduler.repository.VisitEventRepository;
 import com.port.scheduler.service.VesselVisitService.ReportedPosition;
 import com.port.scheduler.service.VesselVisitService.Scheduled;
+import com.port.scheduler.service.VesselVisitService.VesselSize;
 import com.port.scheduler.support.PersistenceTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -80,7 +81,8 @@ class BerthTurnaroundTest {
 
     private Scheduled scheduledIn(String vesselId, Duration sailing) {
         visitService.resolveVessel(null, null, vesselId, null);
-        return visitService.declareEta(vesselId, Instant.now().plus(sailing), POSITION);
+        return visitService.declareEta(vesselId, Instant.now().plus(sailing), POSITION,
+                new VesselSize(120.0, 20.0, null));
     }
 
     private VisitEvent lastRequestTo(String vesselId) {

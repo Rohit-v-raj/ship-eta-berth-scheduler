@@ -70,7 +70,7 @@ class ConsoleControllerTest {
             VisitPhase.INBOUND, null, null, 1,
             ETA, REQUESTED, null, null, null, 1008,
             new PositionReport(REPORTED, 61.5, 4.9, 8.5, ETA),
-            REPORTED, REPORTED.plus(Duration.ofMinutes(60)), null, null, null, null, null, null, null);
+            REPORTED, REPORTED.plus(Duration.ofMinutes(60)), null, null, null, null, null, null, null, null);
 
     @Autowired MockMvc mvc;
     @MockBean PortViewService views;

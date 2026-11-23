@@ -23,6 +23,15 @@ export function bearingDeg(lat1, lon1, lat2, lon2) {
 }
 
 /**
+ * Whether a latitude and a longitude name a real place: numbers, latitude
+ * from -90 to 90, longitude from -180 to 180. The map refuses anything else,
+ * so nothing outside these reaches it.
+ */
+export function isPosition(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+}
+
+/**
  * The area the ETA model was trained on (Norwegian west coast). A position
  * outside it still gets an answer, but not one to rely on.
  */

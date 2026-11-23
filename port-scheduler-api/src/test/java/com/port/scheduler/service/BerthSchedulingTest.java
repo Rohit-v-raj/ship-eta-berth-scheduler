@@ -52,6 +52,8 @@ class BerthSchedulingTest {
     /** How long a vessel of no stated type is expected to stay. */
     private static final Duration STAY = PlanningRules.typicalStay(VesselType.OTHER);
     private static final ReportedPosition POSITION = new ReportedPosition(61.50, 4.90, 8.5);
+    /** A size that fits every berth: a call opens only for a vessel of known length and beam. */
+    private static final VesselSize ANY_SIZE = new VesselSize(120.0, 20.0, null);
 
     @Autowired VesselVisitService visitService;
     @Autowired BerthService berthService;
@@ -172,7 +174,7 @@ class BerthSchedulingTest {
 
     @Test
     void anEstimateWithoutAPositionStoresNoPositionReport() {
-        visitService.declareEta("V001", Instant.now().plus(SAILING), null);
+        visitService.declareEta("V001", Instant.now().plus(SAILING), null, ANY_SIZE);
 
         assertThat(visits.count()).isEqualTo(1);
         assertThat(predictions.count()).isZero();
@@ -540,7 +542,7 @@ class BerthSchedulingTest {
     void aBookedVesselSendingItsEstimateAgainKeepsItsAcceptance() {
         Instant eta = Instant.now().plus(SAILING).truncatedTo(ChronoUnit.SECONDS);
         visitService.resolveVessel(null, null, "V001", null);
-        Scheduled booked = visitService.declareEta("V001", eta, POSITION);
+        Scheduled booked = visitService.declareEta("V001", eta, POSITION, ANY_SIZE);
         visitService.confirm("V001", booked.requestedArrival());
 
         visitService.declareEta("V001", eta, POSITION);                              // the same estimate again
@@ -903,12 +905,12 @@ class BerthSchedulingTest {
     /** The vessel's operator declares an estimated arrival two hours out, as a DCSA estimate would. */
     private Scheduled scheduled(String vesselId, VesselType type) {
         visitService.resolveVessel(null, null, vesselId, type);
-        return visitService.declareEta(vesselId, Instant.now().plus(SAILING), POSITION);
+        return visitService.declareEta(vesselId, Instant.now().plus(SAILING), POSITION, ANY_SIZE);
     }
 
     /** As {@link #scheduled}, for a vessel of no stated type that is this far from arriving. */
     private Scheduled scheduledIn(String vesselId, Duration sailing) {
         visitService.resolveVessel(null, null, vesselId, null);
-        return visitService.declareEta(vesselId, Instant.now().plus(sailing), POSITION);
+        return visitService.declareEta(vesselId, Instant.now().plus(sailing), POSITION, ANY_SIZE);
     }
 }

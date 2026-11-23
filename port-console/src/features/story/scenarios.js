@@ -17,19 +17,21 @@ import { ordinal } from '@/lib/visit'
 
 const HOUR = 3_600_000
 
+// Every ship gives its length, beam and draft: the terminal opens a call only for a ship of known size.
+// All fit every berth (140 m, 24 m beam and 7.5 m draft at most), so any berth can be shown.
 const SHIPS = {
-  SOLVIK: { code: 'SOLVIK', lat: 62.6, lon: 5.4, sog: 14, cog: 190, where: '60 nm to the north' },
-  HAVBRIS: { code: 'HAVBRIS', lat: 62.75, lon: 6.1, sog: 15, cog: 205, where: '74 nm to the north-east' },
-  FJORDLYS: { code: 'FJORDLYS', lat: 62.0, lon: 4.45, sog: 13, cog: 140, where: '29 nm to the north-west' },
-  VESTKYST: { code: 'VESTKYST', lat: 61.62, lon: 4.4, sog: 13, cog: 92, where: '19 nm to the west' },
+  SOLVIK: { code: 'SOLVIK', lat: 62.6, lon: 5.4, sog: 14, cog: 190, where: '60 nm to the north', size: { lengthOverall: 129, width: 20, draft: 7 } },
+  HAVBRIS: { code: 'HAVBRIS', lat: 62.75, lon: 6.1, sog: 15, cog: 205, where: '74 nm to the north-east', size: { lengthOverall: 118, width: 19, draft: 6.8 } },
+  FJORDLYS: { code: 'FJORDLYS', lat: 62.0, lon: 4.45, sog: 13, cog: 140, where: '29 nm to the north-west', size: { lengthOverall: 99, width: 16, draft: 6.2 } },
+  VESTKYST: { code: 'VESTKYST', lat: 61.62, lon: 4.4, sog: 13, cog: 92, where: '19 nm to the west', size: { lengthOverall: 88, width: 14, draft: 5.5 } },
 }
 
 // Ships already at the berths when a story opens, and how long ago each arrived.
 const ALONGSIDE = [
-  { code: 'BREMANGER', arrivedHoursAgo: 13 },
-  { code: 'KINN', arrivedHoursAgo: 10 },
-  { code: 'SKORPA', arrivedHoursAgo: 7 },
-  { code: 'BATALDEN', arrivedHoursAgo: 4 },
+  { code: 'BREMANGER', arrivedHoursAgo: 13, size: { lengthOverall: 110, width: 18, draft: 6.5 } },
+  { code: 'KINN', arrivedHoursAgo: 10, size: { lengthOverall: 105, width: 17, draft: 6.4 } },
+  { code: 'SKORPA', arrivedHoursAgo: 7, size: { lengthOverall: 96, width: 16, draft: 6 } },
+  { code: 'BATALDEN', arrivedHoursAgo: 4, size: { lengthOverall: 92, width: 15, draft: 5.8 } },
 ]
 
 const knots = (value) => `${Number(value).toFixed(1)} knots`
@@ -69,7 +71,7 @@ const shipsAlongside = (ships) => ({
     for (const ship of ships) {
       const arrived = new Date(Date.now() - ship.arrivedHoursAgo * HOUR)
       await sendEvents(
-        [estimatedArrival(ship.code, arrived, 'GCGO'), actualArrival(ship.code, arrived)],
+        [estimatedArrival(ship.code, arrived, 'GCGO', null, ship.size), actualArrival(ship.code, arrived)],
         `Story: ${ship.code} is alongside`,
       )
     }
@@ -130,7 +132,7 @@ const estimatesArrival = (ship) => ({
     // The operator's own sum first; nothing reaches the terminal until the estimate is sent.
     const estimate = await askEta(query, `Story: ${ship.code} asks the ETA calculator`)
     await sendEvents(
-      [estimatedArrival(ship.code, estimate.estimatedArrival, 'GCGO', { lat: ship.lat, lon: ship.lon, distanceNm: estimate.distanceNm })],
+      [estimatedArrival(ship.code, estimate.estimatedArrival, 'GCGO', { lat: ship.lat, lon: ship.lon, distanceNm: estimate.distanceNm }, ship.size)],
       `Story: ${ship.code} sends its estimated arrival`,
     )
     const visit = await visitOf(ship.code)

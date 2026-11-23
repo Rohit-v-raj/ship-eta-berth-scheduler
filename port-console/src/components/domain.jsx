@@ -125,6 +125,7 @@ export function AttentionChips({ visit }) {
         <Chip icon={TriangleAlert} tone="serious">Overstaying, {span(toMillis(now) - toMillis(visit.overstayingSince))} past planned end</Chip>
       )}
       {visit.estimateDueSince && <Chip icon={Clock} tone="warning">Estimate due</Chip>}
+      {visit.draftDueSince && <Chip icon={Clock} tone="warning">Draft due</Chip>}
     </>
   )
 }

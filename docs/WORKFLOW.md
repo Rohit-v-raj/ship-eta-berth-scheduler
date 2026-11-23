@@ -107,7 +107,7 @@ npm install
 ```
 
 **Confirm it worked:** `node --version` prints a version, and `npm test` in
-`port-console/` reports 73 tests passing (they need neither service running).
+`port-console/` reports 80 tests passing (they need neither service running).
 
 ---
 
@@ -179,7 +179,7 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-136 tests in twelve classes: migrations and schema, the scheduling flow,
+143 tests in thirteen classes: migrations and schema, the scheduling flow,
 several ships per berth, the planning rules, the console's read views, DCSA
 publishing and receiving, the JSON contract of each controller, the turnaround
 between ships, and the time limits on the model service. The ones that touch the database need
@@ -190,7 +190,7 @@ wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 **Console, from `port-console/`:**
 
 ```powershell
-npm test        # 73 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
+npm test        # 80 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
 npm run lint
 ```
 They run against a mock of the scheduler, so nothing else has to be running.
@@ -333,8 +333,10 @@ curl -s http://127.0.0.1:8080/api/visits                            # -> []
   ship's requested arrival is worked out again and re-issued if it moved by 15
   minutes or more. A re-issued request clears the ship's earlier acceptance.
 - A ship is given only a berth it fits (length, beam and draft, sent in the
-  `EST` in the standard's optional size fields), and one that fits no berth is
-  refused with `ERROR` feedback. Maintenance windows (`/api/port/maintenance`,
+  `EST` in the standard's size fields), and one that fits no berth is refused
+  with `ERROR` feedback. Length and beam are required the first time the
+  terminal hears of a ship, then kept; the draft for a call is due a day before
+  arrival. Maintenance windows (`/api/port/maintenance`,
   `POST`/`DELETE /api/port/berths/{code}/maintenance`) are planned around; a
   ship booked over a new window is planned again, and a window over a ship
   alongside is refused.

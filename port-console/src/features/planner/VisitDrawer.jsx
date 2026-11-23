@@ -57,7 +57,10 @@ function VisitBody({ detail, onClose }) {
         <AttentionChips visit={visit} />
       </div>
       <p className="-mt-3 text-[13px] text-ink-2">
-        {sizeText(visit) ?? 'Size unknown: the terminal assumes it fits any berth.'}
+        {sizeText(visit) ?? 'Size unknown: this call opened before sizes were required, so its fit was not checked.'}
+        {visit.vessel.loaMeters != null && visit.arrivalDraftMeters == null && visit.ataBerth == null && visit.phase === 'INBOUND'
+          ? ' No draft for this call yet: the largest the ship has declared is used meanwhile.'
+          : ''}
       </p>
 
       <section aria-labelledby="four-times">

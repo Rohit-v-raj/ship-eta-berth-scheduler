@@ -89,9 +89,14 @@ public class VesselVisitService {
      * has none, then allocates a berth or a queue place; for a visit already
      * open it replans. Either way the terminal answers with a requested
      * arrival. A position given with the estimate is kept with it, and a size
-     * is recorded against the vessel and the call. A vessel that fits no berth
-     * here is refused, and no call is opened for it. A vessel already alongside
-     * is refused too: an estimated arrival no longer applies to it.
+     * is recorded against the vessel and the call. A call is opened only for a
+     * vessel whose length overall and beam the terminal holds, from this
+     * estimate or an earlier one: a berth is given only to a vessel known to
+     * fit it. A draft is optional; the largest one declared is kept as the
+     * vessel's maximum and used until the call's own arrives. A vessel that
+     * fits no berth here is refused, and no call is opened for it. A vessel
+     * already alongside is refused too: an estimated arrival no longer applies
+     * to it.
      */
     @Transactional
     public Scheduled declareEta(String vesselId, Instant eta, ReportedPosition position, VesselSize size) {
@@ -103,17 +108,20 @@ public class VesselVisitService {
             throw new VisitConflictException("Vessel " + vesselId
                     + " is alongside; an estimated arrival no longer applies to this call");
         }
-        BigDecimal draft = open.map(VesselVisit::getArrivalDraftMeters).orElse(null);
-        if (size != null) {
-            if (size.lengthOverallMeters() != null) {
-                vessel.setLoaMeters(metres(size.lengthOverallMeters()));
-            }
-            if (size.beamMeters() != null) {
-                vessel.setBeamMeters(metres(size.beamMeters()));
-            }
-            if (size.draftMeters() != null) {
-                draft = metres(size.draftMeters());
-            }
+        BigDecimal length = size != null && size.lengthOverallMeters() != null
+                ? metres(size.lengthOverallMeters()) : vessel.getLoaMeters();
+        BigDecimal beam = size != null && size.beamMeters() != null
+                ? metres(size.beamMeters()) : vessel.getBeamMeters();
+        BigDecimal draft = size != null && size.draftMeters() != null
+                ? metres(size.draftMeters()) : open.map(VesselVisit::getArrivalDraftMeters).orElse(null);
+        // checked before anything is recorded: a call opens only for a vessel of known size
+        if (open.isEmpty()) {
+            requireSize(vesselId, length != null, beam != null);
+        }
+        vessel.setLoaMeters(length);
+        vessel.setBeamMeters(beam);
+        if (draft != null && (vessel.getMaxDraftMeters() == null || draft.compareTo(vessel.getMaxDraftMeters()) > 0)) {
+            vessel.setMaxDraftMeters(draft);
         }
         // checked before a call is opened, so a vessel that fits nowhere leaves no visit behind
         berthService.refuseUnlessABerthFits(vessel, draft);
@@ -178,6 +186,32 @@ public class VesselVisitService {
     }
 
     /**
+     * Refuse an estimate that would open a call for a vessel whose length
+     * overall and beam the terminal does not hold, neither in the estimate nor
+     * on record. Looks the vessel up without creating it, so a refused event
+     * leaves no vessel record. A vessel with a call already open passes: a new
+     * estimate for it needs no size.
+     */
+    @Transactional(readOnly = true)
+    public void checkSizeKnown(String imoNumber, String mmsi, String name, VesselSize size) {
+        checkIdentifiers(imoNumber, mmsi, name);
+        boolean length = size != null && size.lengthOverallMeters() != null;
+        boolean beam = size != null && size.beamMeters() != null;
+        if (length && beam) {
+            return;
+        }
+        Optional<Vessel> known = findVessel(imoNumber, mmsi, name);
+        if (known.isPresent()) {
+            if (visitRepository.findByVesselAndPhaseNotIn(known.get(), VisitPhase.CLOSED).isPresent()) {
+                return;
+            }
+            length |= known.get().getLoaMeters() != null;
+            beam |= known.get().getBeamMeters() != null;
+        }
+        requireSize(known.map(Vessel::getCode).orElseGet(() -> codeFor(imoNumber, mmsi, name)), length, beam);
+    }
+
+    /**
      * The terminal's own code for a vessel named by its international
      * identifiers, creating the vessel record if it is not yet known. A type
      * given for a vessel already on record is kept as its type. Identifiers
@@ -186,23 +220,14 @@ public class VesselVisitService {
     @Transactional
     public String resolveVessel(String imoNumber, String mmsi, String name, VesselType type) {
         checkIdentifiers(imoNumber, mmsi, name);
-        Optional<Vessel> known = Optional.empty();
-        if (imoNumber != null) {
-            known = vesselRepository.findByImoNumber(imoNumber);
-        }
-        if (known.isEmpty() && mmsi != null) {
-            known = vesselRepository.findByMmsi(mmsi);
-        }
-        if (known.isEmpty() && name != null) {
-            known = vesselRepository.findByCode(name);
-        }
+        Optional<Vessel> known = findVessel(imoNumber, mmsi, name);
         if (known.isPresent()) {
             if (type != null) {
                 known.get().setType(type);
             }
             return known.get().getCode();
         }
-        String code = imoNumber != null ? "IMO" + imoNumber : mmsi != null ? "MMSI" + mmsi : name;
+        String code = codeFor(imoNumber, mmsi, name);
         if (code == null) {
             throw new IllegalArgumentException("A vessel needs an IMO number, an MMSI or a name");
         }
@@ -269,6 +294,37 @@ public class VesselVisitService {
             throw new VisitConflictException("Visit " + visitRef + " is already over");
         }
         berthService.expectCompletion(visit, at, reason == null || reason.isBlank() ? null : reason.strip());
+    }
+
+    /** The vessel record named by IMO number, else MMSI, else name; empty if there is none. */
+    private Optional<Vessel> findVessel(String imoNumber, String mmsi, String name) {
+        Optional<Vessel> known = Optional.empty();
+        if (imoNumber != null) {
+            known = vesselRepository.findByImoNumber(imoNumber);
+        }
+        if (known.isEmpty() && mmsi != null) {
+            known = vesselRepository.findByMmsi(mmsi);
+        }
+        if (known.isEmpty() && name != null) {
+            known = vesselRepository.findByCode(name);
+        }
+        return known;
+    }
+
+    /** The code a new vessel record gets: from its IMO number, else its MMSI, else its name. */
+    private static String codeFor(String imoNumber, String mmsi, String name) {
+        return imoNumber != null ? "IMO" + imoNumber : mmsi != null ? "MMSI" + mmsi : name;
+    }
+
+    /** Refuse, saying what is missing, unless both the length overall and the beam are known. */
+    private static void requireSize(String vessel, boolean length, boolean beam) {
+        if (length && beam) {
+            return;
+        }
+        String missing = !length && !beam ? "length overall or beam" : !length ? "length overall" : "beam";
+        String fields = !length && !beam ? "lengthOverall and width" : !length ? "lengthOverall" : "width";
+        throw new IllegalArgumentException("The terminal holds no " + missing + " for " + vessel + "; send "
+                + fields + " (in vesselSizeUnit) with its estimate. A berth is given only to a vessel known to fit it");
     }
 
     private VesselVisit openVisit(String vesselId) {

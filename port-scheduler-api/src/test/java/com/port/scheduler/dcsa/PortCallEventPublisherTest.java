@@ -4,6 +4,7 @@ import com.port.scheduler.dcsa.PortCallEventPublisher.Filter;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Page;
 import com.port.scheduler.entity.vessel.VesselType;
 import com.port.scheduler.service.VesselVisitService;
+import com.port.scheduler.service.VesselVisitService.VesselSize;
 import com.port.scheduler.support.PersistenceTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,6 +117,7 @@ class PortCallEventPublisherTest {
 
     private void schedule(String vesselId) {
         visitService.resolveVessel(null, null, vesselId, VesselType.CONTAINER);
-        visitService.declareEta(vesselId, Instant.now().plus(Duration.ofHours(2)), null);
+        visitService.declareEta(vesselId, Instant.now().plus(Duration.ofHours(2)), null,
+                new VesselSize(120.0, 20.0, null));
     }
 }
