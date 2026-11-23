@@ -79,7 +79,7 @@ export function HarbourPage() {
         </Panel>
       </div>
 
-      <Panel title="Arrivals" hint="Visits in progress, in queue order">
+      <Panel title="Arrivals" hint="Visits in progress, in the order the calls were opened">
         {visitsQuery.isError ? (
           <Notice tone="error" title="The visits could not be loaded">{visitsQuery.error.message}</Notice>
         ) : visitsQuery.isPending ? (

@@ -6,39 +6,45 @@ import { AGREEMENT, agreementOf, answerOverdueMs, STANDING, standingOf } from '@
 export function KpiStrip({ port, visits, maintenance = [] }) {
   const { now, zone } = useTime()
   const berthCount = port.berths.filter((b) => b.status === 'ACTIVE').length
-  const holding = visits.filter((v) => v.berth)
+  const alongside = visits.filter((v) => standingOf(v) === STANDING.ALONGSIDE)
+  const booked = visits.filter((v) => standingOf(v) === STANDING.RESERVED)
   const waiting = visits.filter((v) => standingOf(v) === STANDING.WAITING)
   const awaiting = visits.filter((v) => agreementOf(v) === AGREEMENT.AWAITING)
   const overdue = awaiting.filter((v) => answerOverdueMs(v, now) > 0)
   const underMaintenance = new Set(
     maintenance.filter((m) => toMillis(m.from) <= now.getTime() && now.getTime() < toMillis(m.to)).map((m) => m.berthCode),
   ).size
-  const alongside = holding.filter((v) => standingOf(v) === STANDING.ALONGSIDE).length
 
-  const ends = holding.map((v) => toMillis(v.berth.plannedEnd)).filter((ms) => ms != null).sort((a, b) => a - b)
+  // a berth is in use while a ship lies at it; bookings further ahead do not take it yet
+  const occupied = new Set(alongside.map((v) => v.berth.berthCode)).size
+  const ends = alongside.map((v) => toMillis(v.berth.plannedEnd)).filter((ms) => ms != null).sort((a, b) => a - b)
   const nextFree = ends[0]
-  const allTaken = holding.length >= berthCount
 
   let freeValue = 'Now'
-  let freeNote = `${berthCount - holding.length} of ${berthCount} berths free`
-  if (allTaken && nextFree != null) {
-    const overdue = nextFree < now.getTime()
-    freeValue = overdue ? 'Overdue' : dayClock(nextFree, zone, now)
-    freeNote = overdue ? `planned free ${relative(nextFree, now)}` : relative(nextFree, now)
+  let freeNote = `${berthCount - occupied} of ${berthCount} berths free`
+  if (occupied >= berthCount && nextFree != null) {
+    const late = nextFree < now.getTime()
+    freeValue = late ? 'Overdue' : dayClock(nextFree, zone, now)
+    freeNote = late ? `planned free ${relative(nextFree, now)}` : relative(nextFree, now)
   }
 
   return (
     <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <Tile
         label="Berths in use"
-        value={`${holding.length} of ${berthCount}`}
-        note={`${alongside} with a ship alongside${underMaintenance > 0 ? `, ${underMaintenance} under maintenance` : ''}`}
+        value={`${occupied} of ${berthCount}`}
+        note={`with a ship alongside${underMaintenance > 0 ? `, ${underMaintenance} under maintenance` : ''}`}
       />
-      <Tile label="Ships waiting" value={waiting.length} note={waiting.length === 0 ? 'no queue' : 'in the virtual queue'} />
+      <Tile label="Ships booked" value={booked.length} note={bookedNote(booked.length, waiting.length)} />
       <Tile label="Next berth free" value={freeValue} note={freeNote} />
       <Tile label="Awaiting the ship's answer" value={awaiting.length} note={awaitingNote(awaiting.length, overdue.length)} />
     </dl>
   )
+}
+
+function bookedNote(booked, waiting) {
+  if (waiting > 0) return `${waiting} more in line, due too far ahead for a berth yet`
+  return booked === 0 ? 'no ship on its way' : 'each with a berth and a time'
 }
 
 function awaitingNote(awaiting, overdue) {

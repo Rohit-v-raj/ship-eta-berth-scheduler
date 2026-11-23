@@ -54,13 +54,15 @@ class PortViewServiceTest {
 
     @Test
     void anOpenVisitShowsItsBerthOrItsQueuePlaceAndWhereTheVesselSaidItWas() {
-        List.of("V001", "V002", "V003", "V004").forEach(this::schedule);
-        Scheduled queued = schedule("V005");
+        List.of("V001", "V002", "V003", "V004", "V005").forEach(this::schedule);
+        // due in ten days: beyond the booking horizon, so it waits in line with no berth
+        Scheduled queued = visitService.declareEta("V006", Instant.now().plus(Duration.ofDays(10)),
+                new ReportedPosition(61.50, 4.90, 8.5));
 
         List<VisitView> visits = views.visits(null, false);
 
         assertThat(visits).extracting(v -> v.vessel().code())
-                .containsExactly("V001", "V002", "V003", "V004", "V005");
+                .containsExactly("V001", "V002", "V003", "V004", "V005", "V006");
         VisitView berthed = visits.get(0);
         assertThat(berthed.berth().berthCode()).isEqualTo("B1");
         assertThat(berthed.berth().status()).isEqualTo(AllocationStatus.PLANNED);
@@ -68,7 +70,13 @@ class PortViewServiceTest {
         assertThat(berthed.terminalCode()).isEqualTo("FRO-CT");
         assertThat(berthed.rtaBerth()).isEqualTo(berthed.etaBerth());
 
-        VisitView waiting = visits.get(4);
+        // booked behind V001, from when B1 is expected free
+        VisitView behind = visits.get(4);
+        assertThat(behind.berth().berthCode()).isEqualTo("B1");
+        assertThat(behind.berth().plannedStart()).isEqualTo(berthed.berth().plannedEnd());
+        assertThat(behind.queueNumber()).isNull();
+
+        VisitView waiting = visits.get(5);
         assertThat(waiting.berth()).isNull();
         assertThat(waiting.queueNumber()).isEqualTo(1);
         assertThat(waiting.rtaBerth()).isEqualTo(queued.requestedArrival());
@@ -165,6 +173,7 @@ class PortViewServiceTest {
     void visitsCanBeNarrowedToOneVesselAndClosedOnesAreLeftOutUnlessAskedFor() {
         schedule("V001");
         schedule("V002");
+        visitService.arrived("V001", Instant.now());
         berthService.release("B1");
 
         assertThat(views.visits(null, false)).extracting(v -> v.vessel().code()).containsExactly("V002");
@@ -200,6 +209,7 @@ class PortViewServiceTest {
     void theBerthPlanHasALaneForEachBerthWithOpenWindowsAndTheCompletedOnesInThePeriod() {
         schedule("V001");
         schedule("V002");
+        visitService.arrived("V001", Instant.now());
         berthService.release("B1");
         schedule("V003");   // takes B1 now that V001 has left
         Instant now = Instant.now();
@@ -215,6 +225,19 @@ class PortViewServiceTest {
         // a period that does not reach V001's window still shows whatever holds a berth now
         BerthPlanView earlier = views.berthPlan(now.minus(Duration.ofDays(3)), now.minus(Duration.ofDays(2)));
         assertThat(earlier.berths().get(0).windows()).extracting(Window::vesselCode).containsExactly("V003");
+    }
+
+    @Test
+    void aLaneHoldsEveryVesselBookedOnItsBerthInOrder() {
+        List.of("V001", "V002", "V003", "V004", "V005").forEach(this::schedule);   // V005 behind V001 on B1
+        Instant now = Instant.now();
+
+        BerthPlanView plan = views.berthPlan(now, now.plus(Duration.ofDays(3)));
+
+        assertThat(plan.berths().get(0).windows()).extracting(Window::vesselCode, Window::status)
+                .containsExactly(tuple("V001", AllocationStatus.PLANNED), tuple("V005", AllocationStatus.PLANNED));
+        assertThat(plan.berths().get(0).windows().get(1).plannedStart())
+                .isEqualTo(plan.berths().get(0).windows().get(0).plannedEnd());
     }
 
     private Scheduled schedule(String vesselId) {

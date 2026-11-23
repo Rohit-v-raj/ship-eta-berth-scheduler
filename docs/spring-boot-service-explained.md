@@ -2,7 +2,7 @@
 
 > **What this doc is:** a complete, beginner-friendly walkthrough of the Java
 > service in `port-scheduler-api/` — the terminal's API. It hears when a ship
-> expects to arrive, gives it a berth or a queue number, and agrees an arrival
+> expects to arrive, books it on a berth, and agrees an arrival
 > time with it through DCSA Port Call events. It covers the tech stack, the
 > project layout, every class, the HTTP integration (including the HTTP/2 bug
 > we fixed), and how to run and test it. Read it alongside
@@ -14,9 +14,11 @@
 ## 1. The one-sentence summary
 
 The Spring Boot service is the **terminal's side** of the system. A vessel
-operator tells it when a ship expects to arrive; it gives the ship a physical
-**berth** (a parking spot at the port) or, if the port is full, a place in a
-**virtual queue**, and answers with the time it wants the ship there. The two
+operator tells it when a ship expects to arrive; it books the ship on a
+physical **berth** (a parking spot at the port), in a window of its own in a
+**berth plan** that runs a week ahead, and answers with the time it wants the
+ship there. A ship due more than a week ahead waits in a **virtual queue**
+until it is close enough to book. The two
 sides then agree that time through messages in the **DCSA Port Call** format.
 
 It also offers the operator a calculator: the Python ETA model, behind one
@@ -99,7 +101,8 @@ port-scheduler-api/
     │   └── db/migration/            # Flyway SQL: V1 topology, V2 vessel,
     │                                #   V3 vessel visit, V4 demo port seed,
     │                                #   V5 wider IMO number, V6 planned stay,
-    │                                #   V7 who cancelled a call, V8 berth maintenance
+    │                                #   V7 who cancelled a call, V8 berth maintenance,
+    │                                #   V9 several bookings per berth
     ├── main/java/com/port/scheduler/
     │   ├── PortSchedulerApplication.java   # main() — boots the app
     │   ├── controller/
@@ -130,7 +133,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 123 tests in eleven classes (§10)
+    └── test/java/com/port/scheduler/        # 136 tests in twelve classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -417,7 +420,7 @@ Four decisions are worth understanding:
 - **Types are enums, not subclasses.** A container terminal and a bulk terminal
   have the same shape, so `terminal_type` is a column, not a class hierarchy.
 
-**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V8` are
+**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V9` are
 versioned SQL files applied in order at startup, and once one has been applied
 to a shared database it is never edited — changes go in a new file. Hibernate
 runs with `ddl-auto=validate`: it never alters a table, it only checks that the
@@ -501,19 +504,39 @@ Key ideas:
   and refuses any other time. A new request from the terminal clears an
   earlier acceptance. Both rules come from IMO circular FAL.5/Circ.52, which
   the DCSA standard implements.
-- **A released berth goes back to the waiting line**, in the same transaction,
-  and the first ship in line that can use it gets it, with a new requested
-  arrival.
-- **Waiting ships' times are kept current.** After every change to the berth
-  plan (`reschedule`, `arrive`, `release`, `cancel`, maintenance added or
-  removed), `replan` works out again when each waiting ship can berth, in
-  queue order, and hands each time to `request`. `request` re-issues only a time that has moved by the
-  threshold or more, so most ships hear nothing; one that does hear has its
-  earlier acceptance cleared.
+- **Each berth holds a sequence.** A berth has at most one ship alongside
+  (`ACTIVE`; the database refuses a second, V9) and any number of bookings
+  (`PLANNED`), each a window of its own. Every ship that can start within the
+  booking horizon is booked. MySQL cannot refuse overlapping windows, so the
+  service keeps them apart while it holds the berth lock.
+- **`replan` works the plan out again after every change** (`reschedule`,
+  `arrive`, `depart`, `release`, `cancel`, `expectCompletion`, maintenance
+  added or removed), in this order:
+  1. Each berth's line starts when the ship alongside is expected to leave
+     (one overstay step from now if its planned end has passed), or when its
+     last ship left, plus the turnaround.
+  2. The bookings keep their order and are timed again: each starts when the
+     berth is free after the one before it and the ship can be there, clear of
+     maintenance. A ship moves up when the berth frees early, and back behind
+     an overrun, never before its own estimate.
+  3. A ship that has just sent a new estimate keeps its booking unless the
+     late rule below takes it away.
+  4. Ships whose booking the planner's maintenance took away are placed
+     again first.
+  5. A booking moves to another berth that fits its ship and can take it more
+     than the late tolerance (4 h) sooner, without delaying anyone booked
+     there: a ship held up behind an overstay, or one a berth just freed can
+     take much sooner. The first in line moves first.
+  6. Ships with no booking are placed by `plan`, in line order, in the gaps:
+     a stay plus the turnaround must fit before the next booking, so a ship
+     that reports later never delays one booked earlier ("conservative
+     backfilling"). Each placed within the horizon is booked.
+  7. `request` tells every ship whose start moved by the re-issue threshold or
+     more, which clears its earlier acceptance; most ships hear nothing.
 - **A stay counts from the actual arrival.** `arrive` moves the allocation's
   planned end to the arrival plus the stay, so a ship that berths early or
-  late changes when its berth comes free, and with it the waiting ships'
-  times.
+  late changes when its berth comes free, and with it the times of the ships
+  booked after it.
 - **A ship that stays longer keeps its berth.** The planned end is a typical
   stay, so about half of all ships run past it. A ship still alongside after
   its planned end, with no word, is taken to leave one step from now
@@ -535,7 +558,7 @@ Key ideas:
   flags that (a visit's `answerDueAt`, the request's issue time plus
   `port.planning.answer-window-minutes`) and leaves the decision to the
   planner. `cancelByTerminal` closes the call with `cancelled_by = TERMINAL`,
-  and the berth goes to the head of the queue. Nothing is cancelled
+  and the ships booked after it move up. Nothing is cancelled
   automatically.
 - **A second estimate from the same vessel replans its call.** A ship holding a
   berth keeps it and the window moves; either way its request is re-issued
@@ -545,13 +568,18 @@ Key ideas:
 - **A berth is booked only within the horizon.** A ship that can start more
   than `port.planning.booking-horizon-hours` (168, seven days) ahead keeps its
   place in line and is told its own estimate, with the remark "A berth is
-  given within 7 days of arrival", but holds no berth, so a far-off call
-  cannot block one. A booked ship whose new estimate moves beyond the horizon
-  gives its booking up. It is booked at the next replan inside the horizon;
+  given within 7 days of arrival", but holds no berth. A booked ship whose new
+  estimate moves beyond the horizon gives its booking up. It is booked at the next replan inside the horizon;
   any event triggers one, and the estimate expected 72 hours out is one.
-- **Of two berths equally soon, the one free first.** When a ship could start
-  as soon on an occupied berth as on a free one, it is placed on the free one,
-  and booked at once instead of being left waiting.
+- **Of two berths equally soon, the one with most time in hand.** When a ship
+  could start as soon on two berths, it is placed on the one whose ship before
+  it leaves first.
+- **One ship alongside a berth.** `arrive` refuses an arrival at a berth where
+  another ship is still recorded alongside ("B3 still has KVITSOY alongside;
+  its departure is recorded first"). A ship that arrives before others booked
+  ahead of it on its berth is taken in, and they are planned after it.
+  `release` acts only on the ship alongside; a berth with only bookings
+  answers `false` and records nothing.
 - **What a ship reports is checked against its call.** A ship alongside cannot
   omit its call or send a new estimated arrival; a departure needs an arrival,
   may not be dated before it, and is recorded at the time the ship sent, as
@@ -568,18 +596,21 @@ Key ideas:
   that fits no berth in service is refused before a call is opened. Vessel type
   against terminal type is not checked yet.
 - **Maintenance is planned around.** `scheduleMaintenance` refuses a window
-  over the berth's booking or another window; otherwise no ship is planned on
-  that berth for a stay that would run into it.
-- **A booked ship that falls far behind gives its berth up.** In `reschedule`,
-  if a ship holding a berth sends an estimate more than
+  over the stay of the ship alongside or over another window. A booking the
+  window overlaps is cancelled, with the remark "Moved for maintenance on …",
+  and placed again before anyone else moves. No ship is planned on that berth
+  for a stay that would run into it.
+- **A booked ship that falls far behind gives its place up.** In `reschedule`,
+  if a ship holding a booking sends an estimate more than
   `port.planning.late-tolerance-minutes` (240) after its agreed arrival (the
-  planned one, else the requested one), and the rule above would give that
-  berth to a waiting ship instead, the booking is withdrawn (`CANCELLED`) and
-  the ledger says why. The ship keeps its place in line. Otherwise the booking
-  follows the new time.
+  planned one, else the requested one), and another ship can be alongside on
+  that berth sooner (one booked behind it there, one booked elsewhere that
+  would gain more than the tolerance, or one with no booking), the booking is
+  withdrawn (`CANCELLED`) and the ledger says why. The ship is placed again at
+  once. Otherwise the booking follows the new time.
 - **The queue is a query, not a counter.** A queue number is the visit's position
-  among open visits that hold no berth, oldest first. It is stored nowhere, so it
-  cannot drift, and it survives a restart.
+  among open visits that hold no berth, oldest first: only ships due beyond the
+  booking horizon. It is stored nowhere, so it cannot drift.
 - **`FOR UPDATE` replaces `synchronized`.** Every change to the plan starts by
   locking the berth rows (`findInServiceForUpdate`) until the transaction
   ends, so two requests arriving together are worked out one after the other
@@ -704,11 +735,11 @@ conversation only when the operator sends it as an `EST` event.
 | `GET /api/visits` | Visits in progress: berth or queue number, the four arrival times, the last position given, and when the ship's answer to the request is due. `?vessel=` narrows it; `?state=all` adds closed visits |
 | `GET /api/visits/{visitRef}` | One visit with its whole ledger and every position the ship gave |
 | `GET /api/port/berth-plan` | Berth windows over a period (`?from=&to=`) |
-| `PUT /api/port/berths/{berthCode}/release` | Free a berth: the ship is recorded as departed and the berth goes to the head of the queue |
-| `PUT /api/visits/{visitRef}/cancel` | Cancel the call of a ship that has not arrived. A berth it held goes to the head of the queue. An optional `{"reason": "..."}` is kept with the visit |
-| `PUT /api/visits/{visitRef}/expected-completion` | When a ship alongside is expected to leave (`{"at", "reason"}`); the berth's planned end moves there and waiting ships are re-timed. `400` for a time already past, `409` for a ship not alongside |
+| `PUT /api/port/berths/{berthCode}/release` | Free a berth: the ship alongside is recorded as departed and the ships booked after it move up. A berth with no ship alongside answers `"released": false` |
+| `PUT /api/visits/{visitRef}/cancel` | Cancel the call of a ship that has not arrived. Its booking is given up and the plan is worked out again. An optional `{"reason": "..."}` is kept with the visit |
+| `PUT /api/visits/{visitRef}/expected-completion` | When a ship alongside is expected to leave (`{"at", "reason"}`); the berth's planned end moves there and the ships booked after it are re-timed. `400` for a time already past, `409` for a ship not alongside |
 | `GET /api/port/maintenance` | Maintenance windows not yet over, on every berth |
-| `POST /api/port/berths/{berthCode}/maintenance` | Plan maintenance (`{"from", "to", "reason"}`); `201`, or `409` over a booking or another window, `400` for times that make no sense |
+| `POST /api/port/berths/{berthCode}/maintenance` | Plan maintenance (`{"from", "to", "reason"}`); `201`, and booked ships it overlaps are planned again; `409` over the ship alongside or another window, `400` for times that make no sense |
 | `DELETE /api/port/berths/{berthCode}/maintenance/{id}` | Remove a window; `404` if the berth has none with that id |
 
 The four reads go through `PortViewService` and store nothing. The planner's
@@ -718,8 +749,8 @@ actions on a call:
   does the same thing; this is for when the ship's side never reports it.
   Releasing a berth that does not exist returns `404` with a JSON error body
   (`BerthNotFoundException`, turned into a response by
-  `GlobalExceptionHandler`); one that is already free returns `200` with
-  `"released": false`.
+  `GlobalExceptionHandler`); one with no ship alongside returns `200` with
+  `"released": false`, even when ships are booked on it.
 - **`cancel`**, for a ship that has not arrived, typically one that never
   answered the requested arrival. It is refused with `409` for a ship
   alongside or a visit already over, and with `404` for an unknown reference.
@@ -785,10 +816,10 @@ the answer to expect. The short version, run on 13 October 2026:
 | Accept | `POST /events`, `PLN` equal to the request | `{}`; `pta_berth` set |
 | Accept a wrong time | `POST /events`, `PLN` with another time | `200` with an `ERROR` in `feedbackElements` |
 | Fill the port | three more `EST` events | `B2`, `B3`, `B4` |
-| A fifth ship | `EST` | queue place **1**, asked to arrive when a berth is expected free |
+| A fifth ship | `EST` | booked on **B2** after the ship there, asked to arrive an hour after that ship is expected to leave |
 | Its calculator, again | `POST /api/operator/eta` | now carries the request and an advised speed of **5.0 knots** |
-| A ship leaves | `POST /events`, `ACT` departure | its berth goes to the queued ship, with a new request and the acceptance cleared |
-| A ship berths four hours early | `POST /events`, `ACT` arrival | its berth's planned end moves with it, and the ship still waiting is asked for a time two hours earlier |
+| A ship berths four hours early | `POST /events`, `ACT` arrival | its berth's planned end moves with it; the fifth ship keeps its booking, since the gain would be only two hours |
+| That ship leaves | `POST /events`, `ACT` departure | its berth can take the fifth ship 18 hours sooner, so the booking moves there, with a new request and the acceptance cleared |
 | Planner frees a berth | `PUT /api/port/berths/B2/release` | `{"released":true,"berthCode":"B2"}` |
 | Planner cancels a silent call | `PUT /api/visits/{ref}/cancel` | `{"cancelled":true,"visitRef":"VV-..."}`; the feed shows `"isCanceled":true` |
 | Planner cancels a ship alongside | `PUT /api/visits/{ref}/cancel` | `409` |
@@ -796,12 +827,12 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 123 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 136 tests):
 
 | Test class | What it proves |
 |---|---|
-| `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a double-booked berth |
-| `BerthSchedulingTest` | Fill, queue, release, promote, accept, omit and replan; waiting ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind, and a late waiting ship skipped; the booking horizon; reports checked against the call (omit or estimate while alongside, departure without or before arrival, actual times in the future, an estimate sent again). All through the real services and a real database |
+| `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a second ship alongside a berth while allowing several bookings |
+| `BerthSchedulingTest` | Fill, book behind, release, move, accept, omit and replan; booked ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind; the booking horizon; overstays; reports checked against the call (omit or estimate while alongside, departure without or before arrival, actual times in the future, an estimate sent again). All through the real services and a real database |
 | `PortCallEventReceiverTest` | Each DCSA event the operator can send, including a position, a stale acceptance and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
 | `PortCallEventPublisherTest` | What the feed publishes, its filters and its cursor |
 | `PortViewServiceTest` | The console's views after real scheduling |
@@ -809,6 +840,7 @@ The same behaviour is covered by automated tests (`.\gradlew test`, 123 tests):
 | `PlanningRulesTest` | The stay and speed arithmetic |
 | `EtaServiceTest` | The model service client gives up in time when the service is down or accepts and never answers |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production (the other scheduling tests run without it so their times stay plain sums) |
+| `BerthSequenceTest` | Several ships per berth: the gap before a booking used without delaying it, a booking held up behind an overstay moving to a berth more than 4 hours sooner or staying, a ship moved for maintenance keeping its claim, a late ship giving its place to the one behind, arrivals at an occupied berth and ahead of turn |
 
 The ones that touch the database need MySQL running. They use a separate
 schema, `port_core_test`, which is wiped and rebuilt on every run, and they
@@ -830,13 +862,13 @@ refuse to touch any other.
                   (speed for an open call)              VesselVisitService            one transaction per event
         ▼                                                 ├─ vessel + visit           (found or created)
    EtaEstimate, nothing stored                            ├─ visit_event              (the ledger)
-                                                          └─ BerthService             berth, or queue, and the
+                                                          └─ BerthService             booking, or queue, and the
                                                                                       terminal's requested arrival
    GET /api/port, /api/visits ...  ──►  ConsoleController  ──►  PortViewService      read only
    PUT release, PUT cancel         ──►  ConsoleController  ──►  BerthService, VesselVisitService
 ```
 
-**The DCSA endpoint is the vessel's only door; the planner has two actions of
+**The DCSA endpoint is the vessel's only door; the planner has actions of
 its own. Spring Boot owns the rules; Python owns the prediction; MySQL owns
 the state.** The controllers are thin coordinators,
 the services do the work, the entities are what is remembered, and the records
@@ -863,14 +895,9 @@ any tool is allowed to change state.
 
 Closest first:
 
-- **Reorder the queue when a ship is materially late** — today the queue is
-  fixed by the order in which calls were opened, so a berth can stand empty for
-  a ship delayed by weather while a nearer one waits. A ship should keep its
-  place only while its estimate is within a tolerance of its requested
-  arrival; ships that slowed down on purpose must not be penalised.
 - **Fix the ETA label** — the model's training target counts time spent stopped
   near the berth as sailing, so its estimates run late close to port.
-- **Let time itself change the plan** — waiting ships' times are worked out
+- **Let time itself change the plan** — ships' times are worked out
   again when something happens, not when time passes. A ship that overstays
   is flagged on read, but the ships behind it are re-timed only at the next
   event or when the planner sets its expected departure, and an overdue

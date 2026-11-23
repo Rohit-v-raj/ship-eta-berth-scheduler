@@ -107,7 +107,7 @@ npm install
 ```
 
 **Confirm it worked:** `node --version` prints a version, and `npm test` in
-`port-console/` reports 70 tests passing (they need neither service running).
+`port-console/` reports 73 tests passing (they need neither service running).
 
 ---
 
@@ -179,10 +179,10 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-123 tests in eleven classes: migrations and schema, the scheduling flow, the
-planning rules, the console's read views, DCSA publishing and receiving, the
-JSON contract of each controller, the turnaround between ships, and the time
-limits on the model service. The ones that touch the database need
+136 tests in twelve classes: migrations and schema, the scheduling flow,
+several ships per berth, the planning rules, the console's read views, DCSA
+publishing and receiving, the JSON contract of each controller, the turnaround
+between ships, and the time limits on the model service. The ones that touch the database need
 MySQL running (Phase 0.3) and use their own schema, `port_core_test`, which is
 wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 `port_core`.
@@ -190,7 +190,7 @@ wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 **Console, from `port-console/`:**
 
 ```powershell
-npm test        # 70 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
+npm test        # 73 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
 npm run lint
 ```
 They run against a mock of the scheduler, so nothing else has to be running.
@@ -254,7 +254,7 @@ curl http://127.0.0.1:8080/api/port
 > FastAPI at `http://localhost:8000`. If FastAPI is **not** running, the
 > calculator (`/api/operator/eta`) will fail — start Phase 3 first.
 
-> 🔑 Berth occupancy and the queue are **stored**. Stopping the service does not
+> 🔑 The berth plan is **stored**. Stopping the service does not
 > clear them, so a second run of Phase 5 starts from wherever the first one left
 > off. To start clean, press *Reset the port* in the console, or empty the
 > transaction tables:
@@ -316,23 +316,34 @@ curl -s http://127.0.0.1:8080/api/visits                            # -> []
   accepts, `ACT` arrival and departure move the ship on and off its berth, and
   `"portCall":{"isOmitted":true}` drops it. The answer is `200` either way; a
   refusal comes back in `feedbackElements` with severity `ERROR`.
-- The first four ships get `B1` to `B4`. The fifth is queued and is asked to
-  arrive when a berth is expected free, which is one typical stay after the
-  earliest ship's arrival.
-- A freed berth goes straight to the ship that has waited longest, with a new
-  requested arrival; a newcomer cannot take it ahead of the queue.
+- The first four ships get `B1` to `B4`. The fifth is booked behind the ship
+  whose berth comes free first, and is asked to arrive an hour after that ship
+  is expected to leave. Each berth holds a sequence of bookings across the
+  week; only a ship due more than 7 days ahead waits in line with no berth.
+- A ship due soon may use the gap before a booking if it is gone, with an hour
+  to spare, before that ship is due. A booking is never moved or delayed by a
+  ship that reports later.
+- When a berth comes free much sooner than another ship's booking (a ship
+  leaves, a call is dropped), that booking moves to it if the gain is more
+  than 4 hours, with a new requested arrival.
 - A second estimate from the same ship replans its call. It does not take a
   second berth.
 - When the berth plan changes (a ship berths early or late, a berth is
-  released, a call is omitted or cancelled, an estimate moves), every waiting
+  released, a call is omitted or cancelled, an estimate moves), every booked
   ship's requested arrival is worked out again and re-issued if it moved by 15
   minutes or more. A re-issued request clears the ship's earlier acceptance.
 - A ship is given only a berth it fits (length, beam and draft, sent in the
   `EST` in the standard's optional size fields), and one that fits no berth is
   refused with `ERROR` feedback. Maintenance windows (`/api/port/maintenance`,
-  `POST`/`DELETE /api/port/berths/{code}/maintenance`) are planned around.
-- A ship holding a berth that sends an estimate more than 4 hours after its
-  agreed time gives the berth up, if a waiting ship can be alongside sooner.
+  `POST`/`DELETE /api/port/berths/{code}/maintenance`) are planned around; a
+  ship booked over a new window is planned again, and a window over a ship
+  alongside is refused.
+- A ship holding a booking that sends an estimate more than 4 hours after its
+  agreed time gives its place up, if another ship can be alongside on that
+  berth sooner.
+- Only one ship can be alongside a berth. An arrival reported at a berth that
+  another ship still occupies is refused, and *Release* acts only on a ship
+  alongside.
 - A berth is held from the terminal's answer, whether or not the ship accepts.
   `GET /api/visits` shows `answerDueAt`, 60 minutes after the request; the
   console flags a visit past it. Nothing is cancelled automatically: the
@@ -361,10 +372,10 @@ port 8080, so nothing has to be configured.
 
 **Confirm it worked:** the Harbour page shows four berths and, below it, the
 **Stories** bar. Choose *The port fills up* and press the step button until the
-story ends. You should see four berths taken, two ships waiting with a
-requested arrival, the operator's calculator working out a speed, a berth
-released and passed to the head of the queue, and the wire inspector (header,
-*Wire*) listing every request. *Reset the port* closes whatever the story left open.
+story ends. You should see four berths taken, two more ships booked behind
+the ships there with a requested arrival, the operator's calculator working out
+a speed, a berth released early and the ship booked behind it moving up, and
+the wire inspector (header, *Wire*) listing every request. *Reset the port* closes whatever the story left open.
 
 Two more ways to run it:
 
@@ -430,7 +441,7 @@ curl -s -X POST http://127.0.0.1:8080/api/operator/eta -H "Content-Type: applica
 | `bootRun` fails with `Unknown database 'port_core'` | Database not created | `CREATE DATABASE port_core;` (Phase 0.3) |
 | `bootRun` fails with `Schema-validation: missing column` or `missing table` | An entity class and the schema disagree | Add a new Flyway migration for the change; do not edit one that has been applied |
 | `bootRun` fails with `Migration checksum mismatch` | An already-applied migration file was edited | Revert the edit and put the change in a new `V<n>__*.sql` file |
-| A ship is queued, or gets a berth, when you did not expect it | State from an earlier run is still stored | Press *Reset the port* in the console, or empty the transaction tables (Phase 4 note) |
+| A ship is booked behind another, or on a berth you did not expect | State from an earlier run is still stored, or a berth is in its hour of turnaround after a release | Press *Reset the port* in the console, or empty the transaction tables (Phase 4 note) |
 | `PUT .../release` returns `404` | No berth with that code | Use `B1`–`B4`; `GET /api/port` lists them |
 | Console says "The scheduler is not answering" | Spring Boot (:8080) is not running | Start Phase 4, then reload the page |
 | Console says the scheduler could not get an ETA | FastAPI (:8000) is not running | Start Phase 3 |

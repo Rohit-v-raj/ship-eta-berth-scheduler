@@ -42,13 +42,16 @@ its agreed time that has not arrived ("Not arrived, 40 min past agreed
 time"), one still alongside after its berth's planned end ("Overstaying, 2 h
 past planned end") and one that owes a fresh estimate ("Estimate due"). Below the table,
 **Berth maintenance** schedules a window (berth, from, to, reason), lists
-those planned and removes one; a window over a ship's booking is refused, and
-the refusal is shown beside the form.
+those planned and removes one. A ship booked over a new window is planned
+again around it; a window over a ship alongside is refused, and the refusal is
+shown beside the form.
 
-**The berth plan** has one row per berth and a row for waiting ships. Time
-runs left to right, with a line at "now". A berth window is a light wash while
-the berth is only reserved and solid once the ship is alongside. For a waiting
-ship, a dotted line joins when it would arrive to when it is asked to arrive:
+**The berth plan** has one row per berth and a row for ships still in line
+(due more than 7 days ahead, with no berth yet). Time runs left to right, with
+a line at "now". A berth's row shows its whole sequence: the ship alongside,
+solid, and the ships booked after it, each a light wash, in the order they
+berth. For a ship that is asked to come later than it could, a dotted line
+joins when it would arrive to when it is asked to arrive:
 that gap is the time it would otherwise spend at anchor, and the time a slower
 passage can use up instead. Maintenance is a hatched block on its berth's
 lane, and a berth under maintenance now says "maint. to 16:00".
@@ -57,7 +60,7 @@ lane, and a berth under maintenance now says "maint. to 16:00".
 ship gave, and the ledger: every time anyone reported, who reported it and
 when. The planner's actions are here. For a ship alongside: *Expected to
 leave at*, a time in port time and an optional reason, which moves the berth's
-planned end and gives waiting ships new times; and *Release*. For a ship that
+planned end and gives the ships booked after it new times; and *Release*. For a ship that
 has not arrived: *Cancel this call*. A late answer is pointed out above the
 button; whether to cancel is left to the planner.
 
@@ -68,8 +71,9 @@ button; whether to cancel is left to the planner.
    the position). *Calculate only* asks the ETA model when the ship would
    arrive and sends nothing. *Send estimated arrival to the terminal* sends
    that answer as the ship's estimate, with the position, which opens the call.
-2. **Where you stand.** The terminal's answer: a berth or a place in the queue,
-   and the requested arrival in large type. Under it, the speed that would
+2. **Where you stand.** The terminal's answer: the berth reserved for the
+   ship (or a place in line, for a ship due too far ahead), and the requested
+   arrival in large type. Under it, the speed that would
    meet that time, worked out by the calculator.
 3. **Your answer.** Accept, propose another time, or omit the call. Once the
    ship holds a berth: report arrival, then departure.
@@ -85,9 +89,10 @@ requests, not a simulation: each step sends one request to the scheduler and
 then describes, from the answer, what happened. The ships are invented names
 at open-sea positions. Five are built in: *The port fills up*, *A quiet port*,
 *A change of plan*, *A ship goes quiet* (a silent ship's call is cancelled
-and the ships behind it are given new times) and *A ship falls behind* (a
-booked ship sends a much later estimate and its berth goes to a waiting ship
-that can come sooner).
+and a ship booked elsewhere that the freed berth can take much sooner moves to
+it) and *A ship falls behind* (a booked ship sends a much later estimate and
+its berth goes to a ship booked elsewhere that can come sooner; the late one
+is booked again).
 
 ---
 
@@ -218,7 +223,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 70 tests
+npm test             # 73 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

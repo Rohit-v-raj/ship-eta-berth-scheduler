@@ -87,8 +87,8 @@ export function DecisionBar({ visit, port }) {
         title="Omit this call?"
         description={
           standing === STANDING.WAITING
-            ? 'The ship gives up its place in the queue. This cannot be undone.'
-            : `The ship gives up ${visit.berth.berthCode}, which passes to the ship that has waited longest. This cannot be undone.`
+            ? 'The ship gives up its place in line. This cannot be undone.'
+            : `The ship gives up its booking on ${visit.berth.berthCode}; the ships booked after it move up. This cannot be undone.`
         }
         confirmLabel="Omit the call"
         danger

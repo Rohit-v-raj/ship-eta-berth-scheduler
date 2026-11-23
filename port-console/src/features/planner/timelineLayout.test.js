@@ -32,6 +32,31 @@ describe('layoutTimeline', () => {
     expect(bar.clippedLeft).toBe(false)
   })
 
+  it('draws every ship on a berth: the one alongside, then those booked after it', () => {
+    const plan = makeBerthPlan(now)
+    const [alongside] = plan.berths[1].windows
+    plan.berths[1].windows.push({
+      ...alongside,
+      visitRef: 'VV-20261013-NEXT0004',
+      vesselCode: 'NESTE',
+      vesselName: 'NESTE',
+      status: 'PLANNED',
+      plannedStart: new Date(now + 14 * HOUR).toISOString(),
+      plannedEnd: new Date(now + 37 * HOUR).toISOString(),
+      actualStart: null,
+      etaBerth: new Date(now + 6 * HOUR).toISOString(),
+      rtaBerth: new Date(now + 14 * HOUR).toISOString(),
+      ptaBerth: null,
+    })
+    const bars = layout({ plan }).lanes[1].bars
+    expect(bars.map((bar) => [bar.label, bar.status])).toEqual([
+      ['KINN', 'ACTIVE'],
+      ['NESTE', 'PLANNED'],
+    ])
+    expect(bars[1].x).toBe(360) // 14 hours after now, after the hour between ships
+    expect(bars[1].x).toBeGreaterThanOrEqual(bars[0].x + bars[0].width)
+  })
+
   it('draws a ship alongside from its actual arrival, starting off the left edge', () => {
     const [bar] = layout().lanes[1].bars
     expect(bar.status).toBe('ACTIVE')

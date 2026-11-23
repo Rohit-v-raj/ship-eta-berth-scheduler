@@ -41,7 +41,21 @@ async function visitOf(code) {
 }
 
 function stillStanding(visit) {
-  return visit.berth ? `still holds ${visit.berth.berthCode}` : `is still ${ordinal(visit.queueNumber)} in the queue`
+  return visit.berth ? `still holds ${visit.berth.berthCode}` : `is still ${ordinal(visit.queueNumber)} in line`
+}
+
+/** The ships on a berth: the one alongside, then those booked, in the order they are planned. */
+function lineOn(berthCode, visits) {
+  return visits
+    .filter((v) => v.berth?.berthCode === berthCode)
+    .sort((a, b) => (a.berth.status === 'ACTIVE' ? -1 : b.berth.status === 'ACTIVE' ? 1 : toMillis(a.berth.plannedStart) - toMillis(b.berth.plannedStart)))
+}
+
+/** The ship planned on the same berth just before this one, if any. */
+function shipBefore(visit, visits) {
+  const line = lineOn(visit.berth.berthCode, visits)
+  const index = line.findIndex((v) => v.visitRef === visit.visitRef)
+  return index > 0 ? line[index - 1] : null
 }
 
 // ---- steps ---------------------------------------------------------------
@@ -70,17 +84,34 @@ const shipsAlongside = (ships) => ({
 const berthsAlreadyTaken = shipsAlongside(ALONGSIDE)
 
 /**
- * A sentence for each waiting ship whose requested arrival the terminal has
- * just changed. The terminal works the waiting ships' times out again whenever
- * the berth plan changes, and tells a ship only when its time really moves.
+ * A sentence for each ship whose requested arrival or berth the terminal has
+ * just changed. The terminal works the plan out again whenever it changes,
+ * and tells a ship only when its time really moves.
  */
-function reissued(before, after, ctx, except = null) {
-  const was = new Map(before.map((v) => [v.visitRef, v.rtaBerth]))
+function changes(before, after, ctx, except = []) {
+  const was = new Map(before.map((v) => [v.visitRef, v]))
   return after
-    .filter((v) => v.queueNumber != null && v.vessel.code !== except && was.has(v.visitRef) && toMillis(was.get(v.visitRef)) !== toMillis(v.rtaBerth))
-    .map((v) => ` ${v.vessel.code} is now ${ordinal(v.queueNumber)} in the queue, so the terminal asks it for ${ctx.time(v.rtaBerth)} instead of ${ctx.time(was.get(v.visitRef))}.`)
+    .filter((v) => !except.includes(v.vessel.code) && was.has(v.visitRef))
+    .map((v) => {
+      const old = was.get(v.visitRef)
+      const from = old.berth?.berthCode
+      const to = v.berth?.berthCode
+      const timeMoved = toMillis(old.rtaBerth) !== toMillis(v.rtaBerth)
+      if (!timeMoved && from === to) return ''
+      const ask = `the terminal asks it for ${ctx.time(v.rtaBerth)} instead of ${ctx.time(old.rtaBerth)}`
+      const again = old.ptaBerth != null && v.ptaBerth == null ? ', which cancels the time it had agreed: it has to accept again' : ''
+      if (from && to && from !== to) return ` ${v.vessel.code} moves from ${from} to ${to}, which can take it sooner: ${ask}${again}.`
+      if (to && !from) return ` ${v.vessel.code} is booked on ${to}: ${ask}${again}.`
+      if (to) {
+        const earlier = toMillis(v.rtaBerth) < toMillis(old.rtaBerth)
+        return ` ${v.vessel.code} ${earlier ? 'moves up' : 'moves back'} on ${to}: ${ask}${again}.`
+      }
+      return ` ${v.vessel.code} is ${ordinal(v.queueNumber)} in line: ${ask}${again}.`
+    })
     .join('')
 }
+
+const NOTHING_ELSE = " No other ship's time changes."
 
 const estimatesArrival = (ship) => ({
   title: `${ship.code} sends its estimated arrival, ${ship.where}`,
@@ -104,8 +135,8 @@ const estimatesArrival = (ship) => ({
     )
     const visit = await visitOf(ship.code)
     const opening = `Its operator asks the ETA model, which puts the ship ${span(estimate.etaMinutes * 60_000)} away, and sends that to the terminal as its estimated arrival.`
-    if (visit.berth) {
-      return `${opening} ${visit.berth.berthName} is free, so it is allocated at once and the terminal asks for arrival at ${ctx.time(visit.rtaBerth)}: the ship's own estimate. There is nothing to wait for.`
+    if (visit.berth && toMillis(visit.rtaBerth) === toMillis(visit.etaBerth)) {
+      return `${opening} ${visit.berth.berthName} is free by then, so it is booked at once and the terminal asks for arrival at ${ctx.time(visit.rtaBerth)}: the ship's own estimate. There is nothing to wait for.`
     }
     // The terminal answers with a time. What speed meets it is the ship's sum, so the operator asks the calculator again.
     const speed = await askEta(query, `Story: ${ship.code} asks what speed meets the requested arrival`)
@@ -113,7 +144,11 @@ const estimatesArrival = (ship) => ({
       speed.advisedSpeedKnots != null
         ? `The terminal sends a time, not a speed: the operator's calculator works out that slowing from ${knots(ship.sog)} to ${knots(speed.advisedSpeedKnots)} meets it, rather than hurrying to wait.`
         : "The terminal sends a time, not a speed: the operator's calculator finds no slower speed worth sailing."
-    return `${opening} Every berth is taken, so it is ${ordinal(visit.queueNumber)} in the queue, and the terminal asks for arrival at ${ctx.time(visit.rtaBerth)}, when a berth is expected free. ${advice}`
+    if (visit.berth) {
+      const before = shipBefore(visit, await getVisits())
+      return `${opening} No berth is free by then, so the terminal books it on ${visit.berth.berthCode}${before ? ` after ${before.vessel.code}` : ''} and asks for arrival at ${ctx.time(visit.rtaBerth)}, when the berth is ready for it. ${advice}`
+    }
+    return `${opening} It is due too far ahead to be given a berth yet, so it waits in line, ${ordinal(visit.queueNumber)}, and the terminal asks for arrival at ${ctx.time(visit.rtaBerth)}. ${advice}`
   },
 })
 
@@ -127,20 +162,20 @@ const accepts = (ship) => ({
   },
 })
 
-const berthReleased = (berthCode) => ({
-  title: `The ship on ${berthCode} leaves early`,
-  sends: `PUT /api/port/berths/${berthCode}/release`,
+const shipAheadLeaves = (ship) => ({
+  title: `The ship ahead of ${ship.code} leaves early`,
+  sends: 'PUT /api/port/berths/{berthCode}/release',
   async run(ctx) {
     const before = await getVisits()
-    const head = before.find((v) => v.queueNumber === 1)
+    const mine = before.find((v) => v.vessel.code === ship.code)
+    if (!mine?.berth) throw new Error(`${ship.code} holds no berth. Reset the port and start the story again.`)
+    const berthCode = mine.berth.berthCode
+    const leaving = lineOn(berthCode, before).find((v) => v.berth.status === 'ACTIVE')
+    if (!leaving) throw new Error(`No ship lies at ${berthCode}. Reset the port and start the story again.`)
     await releaseBerth(berthCode, `Story: release ${berthCode}`)
-    if (!head) return `${berthCode} is free. Nobody was waiting, so it stays free for the next ship to report.`
     const after = await getVisits()
-    const promoted = after.find((v) => v.visitRef === head.visitRef)
-    const hadAgreed = head.ptaBerth != null
-    return `${berthCode} goes straight to ${promoted.vessel.code}, which had waited longest. The terminal issues a new request, ${ctx.time(promoted.rtaBerth)}${
-      hadAgreed ? ', and that cancels the time agreed before: the ship has to accept again' : ''
-    }.${reissued(before, after, ctx)}`
+    const opening = `${leaving.vessel.code} leaves ${berthCode} hours before its planned end, and the planner releases the berth.`
+    return `${opening}${changes(before, after, ctx) || NOTHING_ELSE}`
   },
 })
 
@@ -151,16 +186,10 @@ const terminalCancels = (ship) => ({
     const before = await getVisits()
     const silent = before.find((v) => v.vessel.code === ship.code)
     if (!silent) throw new Error(`${ship.code} has no call in progress. Reset the port and start the story again.`)
-    const head = before.find((v) => v.queueNumber === 1)
     await cancelVisit(silent.visitRef, 'no answer to the requested arrival', `Story: the planner cancels ${ship.code}'s call`)
     const after = await getVisits()
-    const opening = `${ship.code} holds ${silent.berth ? silent.berth.berthCode : 'a place in the queue'} but never accepted the requested arrival. The terminal does not take a berth away by itself: an answer left for an hour is flagged on the planner's screen, and the planner decides. (The story does not wait the hour.) The planner cancels the call, which the feed publishes as a berth service cancelled by the terminal, not as a call omitted by the carrier.`
-    const promoted = head && after.find((v) => v.visitRef === head.visitRef)
-    if (!promoted?.berth) return `${opening}${reissued(before, after, ctx)}`
-    const hadAgreed = head.ptaBerth != null
-    return `${opening} ${promoted.berth.berthCode} goes to ${promoted.vessel.code}, with a new request for ${ctx.time(promoted.rtaBerth)}${
-      hadAgreed ? ', so it has to accept again' : ''
-    }.${reissued(before, after, ctx)}`
+    const opening = `${ship.code} holds ${silent.berth ? silent.berth.berthCode : 'a place in line'} but never accepted the requested arrival. The terminal does not take a berth away by itself: an answer left for an hour is flagged on the planner's screen, and the planner decides. (The story does not wait the hour.) The planner cancels the call, which the feed publishes as a berth service cancelled by the terminal, not as a call omitted by the carrier.`
+    return `${opening}${changes(before, after, ctx) || NOTHING_ELSE}`
   },
 })
 
@@ -190,14 +219,26 @@ const fallsBehind = (ship, hours) => ({
     const now = after.find((v) => v.visitRef === mine.visitRef)
     const held = mine.berth?.berthCode
     const opening = `${ship.code} now expects to reach the berth at ${ctx.time(proposed)}, ${hours} hours after the time it agreed.`
-    if (held && !now.berth) {
-      const taker = after.find((v) => v.berth?.berthCode === held)
+    // overtaken: moved to another berth, out of the plan, or someone new is now ahead of it on its berth
+    const aheadOf = (visit, visits) => {
+      const line = lineOn(visit.berth.berthCode, visits)
+      return line.slice(0, line.findIndex((v) => v.visitRef === visit.visitRef)).map((v) => v.visitRef)
+    }
+    const overtaken = held && (now.berth?.berthCode !== held || aheadOf(now, after).some((ref) => !aheadOf(mine, before).includes(ref)))
+    if (overtaken) {
+      const movedIn = lineOn(held, after).find((v) => v.visitRef !== mine.visitRef && before.some((b) => b.visitRef === v.visitRef && b.berth?.berthCode !== held))
+      const taker = movedIn ?? (now.berth?.berthCode === held ? shipBefore(now, after) : lineOn(held, after)[0])
       const given = taker
         ? `${held} goes to ${taker.vessel.code}, which is asked for ${ctx.time(taker.rtaBerth)} and must accept that time.`
         : `${held} is given up.`
-      return `${opening} That is later than the terminal tolerates, and a waiting ship can be alongside sooner, so the berth is assigned again: ${given} ${ship.code} keeps its place in line, ${ordinal(now.queueNumber)}, and is asked for ${ctx.time(now.rtaBerth)}, the soonest a berth is free for it.${reissued(before, after, ctx, ship.code)}`
+      const behind = now.berth ? shipBefore(now, after) : null
+      const rebooked = now.berth
+        ? `${ship.code} is booked again, on ${now.berth.berthCode}${behind ? ` after ${behind.vessel.code}` : ''}, and asked for ${ctx.time(now.rtaBerth)}.`
+        : `${ship.code} keeps its place in line, ${ordinal(now.queueNumber)}, and is asked for ${ctx.time(now.rtaBerth)}.`
+      const others = changes(before, after, ctx, [ship.code, taker?.vessel.code])
+      return `${opening} That is later than the terminal tolerates, and another ship can be alongside ${held} sooner, so the berth is planned again: ${given} ${rebooked}${others}`
     }
-    return `${opening} No waiting ship can use ${held ?? 'a berth'} sooner, so ${ship.code} ${stillStanding(now)}, and the terminal follows its new time: ${ctx.time(now.rtaBerth)}.`
+    return `${opening} No other ship can use ${held ?? 'a berth'} sooner, so ${ship.code} ${stillStanding(now)}, and the terminal follows its new time: ${ctx.time(now.rtaBerth)}.`
   },
 })
 
@@ -210,10 +251,7 @@ const omits = (ship) => ({
     if (!leaving) throw new Error(`${ship.code} has no call in progress. Reset the port and start the story again.`)
     await sendEvents([omittedCall(ship.code, ctx.port.unLocode)], `Story: ${ship.code} omits its call`)
     const after = await getVisits()
-    const waiting = after.filter((v) => v.queueNumber != null)
-    const moved = reissued(before, after, ctx)
-    const next = moved || (waiting.length > 0 ? ` ${waiting[0].vessel.code} is now first in the queue.` : '')
-    return `${ship.code} will not call. It gave up ${leaving.berth ? leaving.berth.berthCode : 'its place in the queue'}.${next}`
+    return `${ship.code} will not call. It gave up ${leaving.berth ? leaving.berth.berthCode : 'its place in line'}.${changes(before, after, ctx) || NOTHING_ELSE}`
   },
 })
 
@@ -243,13 +281,13 @@ export const SCENARIOS = [
   {
     id: 'port-fills-up',
     title: 'The port fills up',
-    summary: 'Every berth is taken when two more ships report. They get a time and a slower speed instead of a wait, and the queue moves when a berth frees early.',
+    summary: 'Every berth is taken when two more ships report. Each is booked after a ship there, with a time and a slower speed instead of a wait, and moves up when a berth frees early.',
     steps: [
       berthsAlreadyTaken,
       estimatesArrival(SHIPS.SOLVIK),
       accepts(SHIPS.SOLVIK),
       estimatesArrival(SHIPS.HAVBRIS),
-      berthReleased('B1'),
+      shipAheadLeaves(SHIPS.SOLVIK),
       accepts(SHIPS.SOLVIK),
       arrives(SHIPS.SOLVIK),
     ],
@@ -269,7 +307,7 @@ export const SCENARIOS = [
   {
     id: 'change-of-plan',
     title: 'A change of plan',
-    summary: 'A waiting ship agrees a time, is delayed and proposes another, then drops the call. The next ship moves up.',
+    summary: 'A booked ship agrees a time, is delayed and proposes another, then drops the call. The plan is worked out again without it.',
     steps: [
       berthsAlreadyTaken,
       estimatesArrival(SHIPS.HAVBRIS),
@@ -282,7 +320,7 @@ export const SCENARIOS = [
   {
     id: 'ship-goes-quiet',
     title: 'A ship goes quiet',
-    summary: 'A ship is given the last berth and never answers. Two more wait behind it. The planner cancels the silent call, the berth passes on, and the ship still waiting is given a new time.',
+    summary: 'A ship is given the last free berth and never answers. Two more are booked after the ships alongside. The planner cancels the silent call, and a ship that the freed berth can take much sooner moves to it.',
     steps: [
       shipsAlongside(ALONGSIDE.slice(0, 3)),
       estimatesArrival(SHIPS.VESTKYST),
@@ -290,13 +328,13 @@ export const SCENARIOS = [
       accepts(SHIPS.SOLVIK),
       estimatesArrival(SHIPS.HAVBRIS),
       terminalCancels(SHIPS.VESTKYST),
-      accepts(SHIPS.SOLVIK),
+      accepts(SHIPS.HAVBRIS),
     ],
   },
   {
     id: 'falls-behind',
     title: 'A ship falls behind',
-    summary: 'A ship holding the last berth sends an estimate hours later than the time it agreed. A waiting ship that can come sooner gets the berth; the late one keeps its place in line.',
+    summary: 'A ship holding the last free berth sends an estimate hours later than the time it agreed. A ship booked elsewhere that can come much sooner gets the berth; the late one is booked again.',
     steps: [
       shipsAlongside(ALONGSIDE.slice(0, 3)),
       estimatesArrival(SHIPS.VESTKYST),
@@ -310,16 +348,17 @@ export const SCENARIOS = [
 
 /**
  * Close every visit in progress, so a story can start from an empty port.
- * Waiting ships are omitted first; then releasing a berth promotes no one.
+ * Ships not alongside, booked or waiting, are omitted first; then releasing
+ * the berths of the ships alongside moves no one up.
  * @returns {Promise<number>} how many visits were closed
  */
 export async function resetPort(port) {
   const visits = await getVisits()
-  const waiting = visits.filter((v) => !v.berth)
-  if (waiting.length > 0) {
-    await sendEvents(waiting.map((v) => omittedCall(v.vessel.code, port.unLocode)), 'Reset: omit the waiting calls')
+  const coming = visits.filter((v) => v.berth?.status !== 'ACTIVE')
+  if (coming.length > 0) {
+    await sendEvents(coming.map((v) => omittedCall(v.vessel.code, port.unLocode)), 'Reset: omit the calls not yet alongside')
   }
-  for (const visit of visits.filter((v) => v.berth)) {
+  for (const visit of visits.filter((v) => v.berth?.status === 'ACTIVE')) {
     await releaseBerth(visit.berth.berthCode, `Reset: release ${visit.berth.berthCode}`)
   }
   return visits.length

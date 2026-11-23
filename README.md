@@ -3,9 +3,9 @@
 **The aim is to cut shipping emissions.** A ship that hurries to port and then
 waits at anchor for a berth has burned fuel for nothing. This project predicts
 when ships will arrive from raw **AIS** (Automatic Identification System)
-tracking data, then plans their berths: a free berth or a place in the queue, a
-requested arrival time, and a slower speed that brings the ship in when its
-berth is ready. An end-to-end system spanning a Python data/model pipeline and
+tracking data, then plans their berths: a berth and a window in a plan that
+runs a week ahead, a requested arrival time, and a slower speed that brings the
+ship in when its berth is ready. An end-to-end system spanning a Python data/model pipeline and
 a Java Spring Boot backend, built as the marine side of a terminal operating
 system and being brought in line with the **DCSA Port Call** standard. A React
 console puts it on screen: the berth plan against time, the ships on a map, and
@@ -14,7 +14,7 @@ the exchange between terminal and ship.
 ```
   Vessel operator ──┐    ┌───────────────────────────┐      ┌──────────────────────┐
   Terminal staff ───┼──▶ │  Spring Boot API (Java 21) │ ───▶ │  FastAPI service     │
-  Carrier system ───┘    │  ETA → berth or queue      │ HTTP │  (Python)            │
+  Carrier system ───┘    │  ETA → berth and window    │ HTTP │  (Python)            │
    (DCSA events)         │  requested arrival, speed  │ ◀─── │  XGBoost ETA model   │
                          └─────────────┬─────────────┘ ETA  └──────────────────────┘
                                        ▼
@@ -76,11 +76,14 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
 ## What the scheduler does
 
 - **A call opens with an estimate.** A ship's operator sends an estimated
-  arrival; the terminal gives the ship the first free berth, or a place in a
-  virtual queue.
+  arrival, and the terminal books it on a berth, in a window of its own.
+- **A berth plan, not a single booking.** Each berth holds a sequence of ships
+  across the week. A ship due soon may use the gap before a ship booked days
+  ahead, if it is gone (with an hour to spare) before that ship is due; a
+  booking is never moved or delayed by a ship that reports later.
 - **A time, not just a number.** The terminal answers every estimate with a
-  *requested arrival*: the ship's own estimate if a berth is free, otherwise
-  the time a berth is expected to come free.
+  *requested arrival*: the ship's own estimate if its berth is free by then,
+  otherwise an hour after the ship before it is expected to leave.
 - **The operator answers.** Accept the requested time, propose the time the
   ship can make, or omit the call.
 - **A berth is held from the terminal's answer**, not from the ship's
@@ -89,27 +92,29 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
   the call. Nothing is cancelled automatically.
 - **One route for all of it.** Estimates, acceptances, arrivals, departures
   and omitted calls are DCSA Port Call events. There is no second way in.
-- **The queue moves by itself.** A freed berth goes to the ship that has
-  waited longest, and the terminal issues it a new request. Whenever the berth
-  plan changes (a ship berths early or late, a call is dropped, an estimate
-  moves), every ship still waiting is given a new time if its own has moved.
-- **A late ship gives its berth up.** If a ship holding a berth sends an
-  estimate more than 4 hours after the time it agreed, and a waiting ship can
-  be alongside sooner, the berth goes to that ship. The late one keeps its
-  place in line.
+- **The plan moves by itself.** Whenever it changes (a ship berths early or
+  late, leaves, drops its call, sends a new estimate), the ships booked after
+  it on its berth move up or back, and a booking moves to another berth that
+  can take it more than 4 hours sooner. A ship is told a new time only when
+  its own moves by 15 minutes or more.
+- **A late ship gives its place up.** If a ship holding a booking sends an
+  estimate more than 4 hours after the time it agreed, and another ship can be
+  alongside on that berth sooner, the place goes to that ship, and the late
+  one is planned again.
 - **Berths fit the ships, and maintenance is planned around.** A ship is given
   only a berth its length, beam and draft fit, and is turned away if it fits
   none. Berth maintenance is recorded in advance; no ship is given a berth for
-  a stay that would run into it.
+  a stay that would run into it, and a ship booked over a new window is planned
+  again around it. Only one ship can be alongside a berth: an arrival
+  reported at a berth another ship still occupies is refused.
 - **A ship that stays longer keeps its berth.** A berth's planned end is a
   typical stay, so about half of all ships run past it. Such a ship is taken
   to be still there, the console flags it, and the planner sets when it is
   expected to leave (the terminal's estimated completion of cargo operations);
-  waiting ships are re-timed from that. An hour is kept between one ship
+  the ships booked after it are re-timed from that. An hour is kept between one ship
   leaving a berth and the next arriving.
-- **A berth is booked within seven days of arrival.** A ship due later keeps
-  its place in line and is told when to come, but holds no berth, so a call
-  months away cannot block one.
+- **Every ship due within seven days holds a booking.** A ship due later
+  keeps its place in line and is told when to come, but holds no berth yet.
 - **What a ship reports is checked against its call.** A ship alongside cannot
   omit its call or send a new estimated arrival; a departure needs an arrival
   and keeps the time the ship sent; times in the future, events for another
@@ -192,9 +197,9 @@ Four controllers, one per flow.
 | Operator's calculator | `POST /api/operator/eta` | the model's ETA for a position, and the speed that meets the terminal's requested time. Stores nothing |
 | Console | `GET /api/port` · `/api/port/berth-plan` | the port and its berths; berth windows over a period |
 | | `GET /api/visits` · `/api/visits/{ref}` | visits in progress; one visit with its ledger |
-| | `PUT /api/port/berths/{code}/release` | the planner frees a berth when a ship's side has not reported leaving |
+| | `PUT /api/port/berths/{code}/release` | the planner frees a berth when the ship alongside has left without reporting it |
 | | `PUT /api/visits/{ref}/cancel` | the planner cancels the call of a ship that has not arrived, for example one that never answered |
-| | `PUT /api/visits/{ref}/expected-completion` | the planner sets when a ship alongside is expected to leave; waiting ships are given new times |
+| | `PUT /api/visits/{ref}/expected-completion` | the planner sets when a ship alongside is expected to leave; the ships booked after it are given new times |
 | | `GET /api/port/maintenance` · `POST`, `DELETE /api/port/berths/{code}/maintenance` | berth maintenance: the windows planned, schedule one, remove one |
 | Assistant | `/api/agent/*` | a Gemini assistant; its tools still return sample data |
 
@@ -242,11 +247,13 @@ Four controllers, one per flow.
   and the terminal knows a ship's position only when an estimate carries one.
   Checking the model against real arrivals needs a position feed of its own.
 - **The plan is a rule, not an optimiser.** Ships are placed first come, first
-  served, with a 4-hour tolerance for lateness; nothing searches for the best
-  plan overall.
-- **Waiting times follow events, not the clock.** A waiting ship's requested
-  time is worked out again whenever something happens to the berth plan, not
-  as time passes. A ship that overstays is flagged on screen at once, but the
+  served, into the gaps the bookings leave, with a 4-hour tolerance for
+  lateness and for moving a booking; nothing searches for the best plan
+  overall. A booking moves only for a gain of more than 4 hours, so a smaller
+  saving elsewhere is left unused.
+- **Times follow events, not the clock.** A ship's requested time is worked
+  out again whenever something happens to the berth plan, not as time
+  passes. A ship that overstays is flagged on screen at once, but the
   ships behind it are re-timed only at the next event or when the planner sets
   its expected departure.
 - **A stay starts as a median.** A berth's planned end is the arrival plus a
@@ -322,8 +329,8 @@ sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
 `curl` command, with the answer to expect and how each step lines up with the
 standard.
 
-Java tests (101, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`. Console tests (70): `npm test` from `port-console/`.
+Java tests (136, against a throwaway MySQL schema): `.\gradlew test` from
+`port-scheduler-api/`. Console tests (73): `npm test` from `port-console/`.
 
 ## Data
 
