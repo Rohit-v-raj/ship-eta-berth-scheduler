@@ -18,7 +18,7 @@ the exchange between terminal and ship.
    (DCSA events)         │  requested arrival, speed  │ ◀─── │  XGBoost ETA model   │
                          └─────────────┬─────────────┘ ETA  └──────────────────────┘
                                        ▼
-                               MySQL (10 tables)
+                               MySQL (11 tables)
 ```
 
 ## Why: decarbonisation
@@ -120,7 +120,9 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
 - **What a ship reports is checked against its call.** A ship alongside cannot
   omit its call or send a new estimated arrival; a departure needs an arrival
   and keeps the time the ship sent; times in the future, events for another
-  port and malformed identifiers are refused with a plain reason.
+  port and malformed identifiers are refused with a plain reason. A message
+  delivered twice is applied once, and an estimate or omitted call that a
+  later message from the same ship has overtaken is not applied.
 - **Speed is the ship's sum.** The terminal sends a time, as the standard
   says, and never a speed. The operator's calculator runs the ETA model and
   works out the speed that meets the requested time, never below an economical
@@ -331,8 +333,8 @@ sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
 `curl` command, with the answer to expect and how each step lines up with the
 standard.
 
-Java tests (143, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`. Console tests (80): `npm test` from `port-console/`.
+Java tests (150, against a throwaway MySQL schema): `.\gradlew test` from
+`port-scheduler-api/`. Console tests (81): `npm test` from `port-console/`.
 
 ## Data
 

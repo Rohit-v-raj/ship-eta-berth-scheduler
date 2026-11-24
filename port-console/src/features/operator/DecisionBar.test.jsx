@@ -61,7 +61,12 @@ describe('DecisionBar', () => {
     expect(sent).toHaveLength(0)
     await userEvent.click(await screen.findByRole('button', { name: 'Omit the call' }))
 
-    expect(sent[0].events).toEqual([{ vessel: { vesselName: 'HAVBRIS' }, portCall: { UNLocationCode: 'NOFRO', isOmitted: true } }])
+    expect(sent[0].events).toEqual([{
+      eventID: expect.any(String),
+      eventUpdatedDateTime: expect.any(String),
+      vessel: { vesselName: 'HAVBRIS' },
+      portCall: { UNLocationCode: 'NOFRO', isOmitted: true },
+    }])
   })
 
   it('offers only departure to a ship that is alongside', () => {

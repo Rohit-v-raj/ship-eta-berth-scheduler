@@ -14,6 +14,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 /**
  * Vessel master data: what a ship is, independent of any particular call.
@@ -65,6 +66,14 @@ public class Vessel extends BaseEntity {
 
     @Column(name = "air_draft_m", precision = 5, scale = 2)
     private BigDecimal airDraftMeters;
+
+    /**
+     * The sender's time ({@code eventUpdatedDateTime}) of the latest DCSA event
+     * applied for this vessel. An estimate or an omitted call sent before it is
+     * not applied when it arrives late.
+     */
+    @Column(name = "last_event_sent_at")
+    private Instant lastEventSentAt;
 
     private Integer grossTonnage;
 

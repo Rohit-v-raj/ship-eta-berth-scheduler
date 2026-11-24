@@ -4,10 +4,13 @@ import { server } from '@/test/msw/server'
 import { actualDeparture, DcsaFeedbackError, estimatedArrival, getEvents, omittedCall, plannedArrival, sendEvents } from './dcsa'
 
 const time = '2026-10-13T14:00:00.123456Z'
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 describe('DCSA event builders', () => {
   it('build a planned arrival at berth, named by the vessel code', () => {
     expect(plannedArrival('SOLVIK', time)).toEqual({
+      eventID: expect.stringMatching(UUID),
+      eventUpdatedDateTime: expect.any(String),
       vessel: { vesselName: 'SOLVIK' },
       portCallService: {
         portCallServiceTypeCode: 'BERTH',
@@ -54,8 +57,20 @@ describe('DCSA event builders', () => {
     expect(estimatedArrival('SOLVIK', time, null, null, { lengthOverall: undefined }).vessel).toEqual({ vesselName: 'SOLVIK' })
   })
 
+  it('give every event its own id and the time it was made, so a repeat or an overtaken one is not applied', () => {
+    const before = Date.now()
+    const first = estimatedArrival('SOLVIK', time, 'GCGO')
+    const second = estimatedArrival('SOLVIK', time, 'GCGO')
+    expect(first.eventID).toMatch(UUID)
+    expect(second.eventID).not.toBe(first.eventID)
+    expect(Date.parse(first.eventUpdatedDateTime)).toBeGreaterThanOrEqual(before)
+    expect(omittedCall('SOLVIK', 'NOFRO').eventID).toMatch(UUID)
+  })
+
   it('build an omitted port call with no timestamp', () => {
     expect(omittedCall('SOLVIK', 'NOFRO')).toEqual({
+      eventID: expect.stringMatching(UUID),
+      eventUpdatedDateTime: expect.any(String),
       vessel: { vesselName: 'SOLVIK' },
       portCall: { UNLocationCode: 'NOFRO', isOmitted: true },
     })

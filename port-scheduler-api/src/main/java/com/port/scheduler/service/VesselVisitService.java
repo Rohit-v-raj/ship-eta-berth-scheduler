@@ -10,6 +10,7 @@ import com.port.scheduler.entity.visit.TimeClassifier;
 import com.port.scheduler.entity.visit.VesselVisit;
 import com.port.scheduler.entity.visit.VisitEvent;
 import com.port.scheduler.entity.visit.VisitPhase;
+import com.port.scheduler.exceptions.StaleEventException;
 import com.port.scheduler.exceptions.VisitConflictException;
 import com.port.scheduler.exceptions.VisitNotFoundException;
 import com.port.scheduler.repository.EtaPredictionRepository;
@@ -209,6 +210,33 @@ public class VesselVisitService {
             beam |= known.get().getBeamMeters() != null;
         }
         requireSize(known.map(Vessel::getCode).orElseGet(() -> codeFor(imoNumber, mmsi, name)), length, beam);
+    }
+
+    /**
+     * Refuse an event sent before the latest event already applied for its
+     * vessel: a later message has overtaken it. Looks the vessel up without
+     * creating it; an unknown vessel has nothing to be out of order with.
+     */
+    @Transactional(readOnly = true)
+    public void checkInOrder(String imoNumber, String mmsi, String name, Instant sentAt) {
+        findVessel(imoNumber, mmsi, name)
+                .map(Vessel::getLastEventSentAt)
+                .filter(sentAt::isBefore)
+                .ifPresent(latest -> {
+                    throw new StaleEventException("Not applied: this event was sent at " + sentAt
+                            + ", before the latest event from this vessel, sent at " + latest
+                            + ", which overtook it");
+                });
+    }
+
+    /** Record the sender's time of an event applied for the vessel, if it is the latest yet. */
+    @Transactional
+    public void noteSent(String vesselId, Instant sentAt) {
+        vesselRepository.findByCode(vesselId).ifPresent(vessel -> {
+            if (vessel.getLastEventSentAt() == null || sentAt.isAfter(vessel.getLastEventSentAt())) {
+                vessel.setLastEventSentAt(sentAt);
+            }
+        });
     }
 
     /**

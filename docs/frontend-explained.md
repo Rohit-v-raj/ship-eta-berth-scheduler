@@ -226,7 +226,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 80 tests
+npm test             # 81 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

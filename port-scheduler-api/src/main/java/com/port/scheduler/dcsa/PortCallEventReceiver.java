@@ -6,9 +6,12 @@ import com.port.scheduler.dcsa.PortCallMessages.GeoCoordinate;
 import com.port.scheduler.dcsa.PortCallMessages.PortCallService;
 import com.port.scheduler.dcsa.PortCallMessages.Timestamp;
 import com.port.scheduler.dcsa.PortCallMessages.Vessel;
+import com.port.scheduler.entity.dcsa.ReceivedEvent;
 import com.port.scheduler.entity.topology.Port;
 import com.port.scheduler.entity.vessel.VesselType;
+import com.port.scheduler.exceptions.StaleEventException;
 import com.port.scheduler.repository.PortRepository;
+import com.port.scheduler.repository.ReceivedEventRepository;
 import com.port.scheduler.service.VesselVisitService;
 import com.port.scheduler.service.VesselVisitService.ReportedPosition;
 import com.port.scheduler.service.VesselVisitService.VesselSize;
@@ -16,10 +19,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Applies DCSA Port Call 2.0 events sent to this terminal by a vessel operator.
@@ -30,7 +39,9 @@ import java.util.List;
  * and off its berth, and an omitted call is cancelled. Each event is applied
  * in its own transaction, so one that fails does not undo the others; what
  * went wrong is reported per event, as the standard specifies. An event for
- * another port is refused.
+ * another port is refused. A repeated event is answered and not applied
+ * again, and an estimate or omitted call that arrives after a later event
+ * from the same vessel is not applied.
  */
 @Service
 public class PortCallEventReceiver {
@@ -38,12 +49,20 @@ public class PortCallEventReceiver {
     private static final Logger log = LoggerFactory.getLogger(PortCallEventReceiver.class);
     private static final double FEET_TO_METRES = 0.3048;
 
+    /** How far ahead of the terminal's clock a sender's time may be, for clocks that differ a little. */
+    private static final Duration CLOCK_LEEWAY = Duration.ofMinutes(5);
+
     private final VesselVisitService visits;
     private final PortRepository portRepository;
+    private final ReceivedEventRepository received;
+    private final TransactionTemplate transactions;
 
-    public PortCallEventReceiver(VesselVisitService visits, PortRepository portRepository) {
+    public PortCallEventReceiver(VesselVisitService visits, PortRepository portRepository,
+                                 ReceivedEventRepository received, PlatformTransactionManager transactionManager) {
         this.visits = visits;
         this.portRepository = portRepository;
+        this.received = received;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
     public List<FeedbackElement> receive(List<Event> events) {
@@ -51,11 +70,15 @@ public class PortCallEventReceiver {
         List<FeedbackElement> feedback = new ArrayList<>();
         for (int i = 0; i < events.size(); i++) {
             String path = "$.events[" + i + "]";
+            Event event = events.get(i);
             try {
-                String note = apply(events.get(i), here);
+                // one transaction per event: its effects and its receipt are kept together, or neither
+                Note note = transactions.execute(status -> apply(event, here));
                 if (note != null) {
-                    feedback.add(new FeedbackElement("WARN", note, path));
+                    feedback.add(new FeedbackElement(note.severity(), note.message(), path));
                 }
+            } catch (StaleEventException e) {
+                feedback.add(new FeedbackElement("WARN", e.getMessage(), path));
             } catch (DataAccessException | TransactionException e) {
                 // the database's own message names tables and columns; the sender gets a plain one
                 log.warn("DCSA event {} could not be stored", path, e);
@@ -67,64 +90,135 @@ public class PortCallEventReceiver {
         return feedback;
     }
 
+    /** A note to the sender about an event understood but not acted on: {@code WARN} or {@code INFO}. */
+    private record Note(String severity, String message) {}
+
     /**
      * Applies one event. Returns a note when the event was understood but
      * deliberately not acted on. Everything that can be checked from the event
      * alone is checked before the vessel is looked up, so a refused event
      * leaves no vessel record behind.
+     *
+     * Events arrive at least once and in no promised order. An event whose
+     * {@code eventID} was applied before is not applied again, unless it
+     * carries a later {@code eventUpdatedDateTime} (an update of it). An
+     * estimate or an omitted call sent before the latest event already applied
+     * for its vessel is not applied. An event with no
+     * {@code eventUpdatedDateTime} cannot be ordered: it is applied as it
+     * comes and takes no part in the order.
      */
-    private String apply(Event event, String here) {
+    private Note apply(Event event, String here) {
         if (event == null || event.vessel() == null) {
             throw new IllegalArgumentException("An event needs a vessel");
         }
         checkPort(event, here);
+        Instant now = Instant.now();
+        Instant sentAt = sentAt(event.eventUpdatedDateTime(), now);
+        Optional<ReceivedEvent> seen = event.eventID() == null
+                ? Optional.empty() : received.findById(event.eventID().toString());
+        if (seen.isPresent() && !isLater(sentAt, seen.get().getUpdatedAt())) {
+            return new Note("INFO", "Already received at " + seen.get().getReceivedAt()
+                    + "; this event was applied then and is not applied again");
+        }
         Vessel vessel = event.vessel();
 
+        String code;
         if (omitted(event)) {
-            visits.omit(vesselId(vessel));
+            checkInOrder(vessel, sentAt);
+            code = vesselId(vessel);
+            visits.omit(code);
+        } else {
+            PortCallService service = event.portCallService();
+            Timestamp timestamp = event.timestamp();
+            if (service == null || timestamp == null
+                    || timestamp.classifierCode() == null || timestamp.serviceDateTime() == null) {
+                throw new IllegalArgumentException(
+                        "An event needs a portCallService and a timestamp with classifierCode and serviceDateTime");
+            }
+            if (!"BERTH".equals(service.portCallServiceTypeCode())) {
+                return new Note("WARN", "Not processed: this terminal acts on BERTH events only");
+            }
+            boolean arrival = "ARRI".equals(service.portCallServiceEventTypeCode());
+            switch (timestamp.classifierCode()) {
+                case "EST" -> {
+                    if (!arrival) {
+                        return new Note("WARN", "Not processed: an estimated departure is addressed to the port authority");
+                    }
+                    ReportedPosition position = position(vessel);
+                    VesselSize size = size(vessel);
+                    // before the vessel is looked up, so an estimate refused for want of a size leaves no record
+                    visits.checkSizeKnown(vessel.vesselIMONumber(), vessel.vesselMMSINumber(), vessel.vesselName(), size);
+                    checkInOrder(vessel, sentAt);
+                    code = vesselId(vessel);
+                    visits.declareEta(code, timestamp.serviceDateTime(), position, size);
+                }
+                case "PLN" -> {
+                    if (!arrival) {
+                        return new Note("WARN", "Not processed: a planned departure is addressed to the port authority");
+                    }
+                    code = vesselId(vessel);
+                    visits.confirm(code, timestamp.serviceDateTime());
+                }
+                case "ACT" -> {
+                    code = vesselId(vessel);
+                    if (arrival) {
+                        visits.arrived(code, timestamp.serviceDateTime());
+                    } else {
+                        visits.departed(code, timestamp.serviceDateTime());
+                    }
+                }
+                case "REQ" -> throw new IllegalArgumentException(
+                        "A requested time at berth is issued by the terminal, not sent to it");
+                default -> throw new IllegalArgumentException(
+                        "Unknown classifierCode '" + timestamp.classifierCode() + "'; use EST, PLN or ACT");
+            }
+        }
+        if (sentAt != null) {
+            visits.noteSent(code, sentAt);
+        }
+        remember(event, sentAt, seen, now);
+        return null;
+    }
+
+    /** Refuse an event sent before the latest one already applied for its vessel; none to check without a time. */
+    private void checkInOrder(Vessel vessel, Instant sentAt) {
+        if (sentAt != null) {
+            visits.checkInOrder(vessel.vesselIMONumber(), vessel.vesselMMSINumber(), vessel.vesselName(), sentAt);
+        }
+    }
+
+    /** Keep the event's id, so a repeat is recognised; an event with no id cannot be. */
+    private void remember(Event event, Instant sentAt, Optional<ReceivedEvent> seen, Instant now) {
+        if (event.eventID() == null) {
+            return;
+        }
+        if (seen.isPresent()) {
+            seen.get().setUpdatedAt(sentAt);
+            seen.get().setReceivedAt(now);
+        } else {
+            received.save(new ReceivedEvent(event.eventID().toString(), sentAt, now));
+        }
+    }
+
+    /**
+     * The sender's time for the event, to the microsecond the database keeps;
+     * null when it gave none. A time more than a few minutes ahead of the clock
+     * is refused, so a sender cannot pin the order of later events.
+     */
+    private static Instant sentAt(Instant updated, Instant now) {
+        if (updated == null) {
             return null;
         }
-        PortCallService service = event.portCallService();
-        Timestamp timestamp = event.timestamp();
-        if (service == null || timestamp == null
-                || timestamp.classifierCode() == null || timestamp.serviceDateTime() == null) {
+        if (updated.isAfter(now.plus(CLOCK_LEEWAY))) {
             throw new IllegalArgumentException(
-                    "An event needs a portCallService and a timestamp with classifierCode and serviceDateTime");
+                    "eventUpdatedDateTime cannot be in the future: " + updated + " has not happened yet");
         }
-        if (!"BERTH".equals(service.portCallServiceTypeCode())) {
-            return "Not processed: this terminal acts on BERTH events only";
-        }
-        boolean arrival = "ARRI".equals(service.portCallServiceEventTypeCode());
-        switch (timestamp.classifierCode()) {
-            case "EST" -> {
-                if (!arrival) {
-                    return "Not processed: an estimated departure is addressed to the port authority";
-                }
-                ReportedPosition position = position(vessel);
-                VesselSize size = size(vessel);
-                // before the vessel is looked up, so an estimate refused for want of a size leaves no record
-                visits.checkSizeKnown(vessel.vesselIMONumber(), vessel.vesselMMSINumber(), vessel.vesselName(), size);
-                visits.declareEta(vesselId(vessel), timestamp.serviceDateTime(), position, size);
-            }
-            case "PLN" -> {
-                if (!arrival) {
-                    return "Not processed: a planned departure is addressed to the port authority";
-                }
-                visits.confirm(vesselId(vessel), timestamp.serviceDateTime());
-            }
-            case "ACT" -> {
-                if (arrival) {
-                    visits.arrived(vesselId(vessel), timestamp.serviceDateTime());
-                } else {
-                    visits.departed(vesselId(vessel), timestamp.serviceDateTime());
-                }
-            }
-            case "REQ" -> throw new IllegalArgumentException(
-                    "A requested time at berth is issued by the terminal, not sent to it");
-            default -> throw new IllegalArgumentException(
-                    "Unknown classifierCode '" + timestamp.classifierCode() + "'; use EST, PLN or ACT");
-        }
-        return null;
+        return updated.truncatedTo(ChronoUnit.MICROS);
+    }
+
+    /** Whether a delivery is an update of an event already received: it carries a later time. */
+    private static boolean isLater(Instant sentAt, Instant before) {
+        return sentAt != null && (before == null || sentAt.isAfter(before));
     }
 
     /** The terminal's code for the vessel the event names, created on first sight. */

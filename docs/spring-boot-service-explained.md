@@ -102,7 +102,8 @@ port-scheduler-api/
     │                                #   V3 vessel visit, V4 demo port seed,
     │                                #   V5 wider IMO number, V6 planned stay,
     │                                #   V7 who cancelled a call, V8 berth maintenance,
-    │                                #   V9 several bookings per berth
+    │                                #   V9 several bookings per berth,
+    │                                #   V10 events received, in order
     ├── main/java/com/port/scheduler/
     │   ├── PortSchedulerApplication.java   # main() — boots the app
     │   ├── controller/
@@ -133,7 +134,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 143 tests in thirteen classes (§10)
+    └── test/java/com/port/scheduler/        # 150 tests in thirteen classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -420,7 +421,7 @@ Four decisions are worth understanding:
 - **Types are enums, not subclasses.** A container terminal and a bulk terminal
   have the same shape, so `terminal_type` is a column, not a class hierarchy.
 
-**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V9` are
+**Who owns the schema?** Flyway. `src/main/resources/db/migration/V1…V10` are
 versioned SQL files applied in order at startup, and once one has been applied
 to a shared database it is never edited — changes go in a new file. Hibernate
 runs with `ddl-auto=validate`: it never alters a table, it only checks that the
@@ -586,6 +587,15 @@ Key ideas:
   the ship's own report; an actual time more than five minutes ahead of the
   clock is refused. The planner's *Release* still records "now", as the
   terminal.
+- **Repeated and out-of-order messages.** The receiver runs each event in its
+  own transaction (`TransactionTemplate`), with the record that it was
+  received. An event whose `eventID` is in `received_event` is answered
+  `INFO` and not applied again, unless it carries a later
+  `eventUpdatedDateTime` (an update). An estimate or omitted call sent before
+  the vessel's latest applied event (`vessel.last_event_sent_at`) is answered
+  `WARN` and not applied (`VesselVisitService.checkInOrder`,
+  `StaleEventException`). A sender time more than 5 minutes ahead is refused.
+  An event without a time takes no part in the order.
 - **A position travels with the estimate.** The DCSA message has optional
   fields for where the ship is and how far it has to go. When they are given,
   they are stored against the visit (`eta_prediction`, source
@@ -834,13 +844,13 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 143 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 150 tests):
 
 | Test class | What it proves |
 |---|---|
 | `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a second ship alongside a berth while allowing several bookings |
 | `BerthSchedulingTest` | Fill, book behind, release, move, accept, omit and replan; booked ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind; the booking horizon; overstays; reports checked against the call (omit or estimate while alongside, departure without or before arrival, actual times in the future, an estimate sent again). All through the real services and a real database |
-| `PortCallEventReceiverTest` | Each DCSA event the operator can send, including a position, a stale acceptance and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
+| `PortCallEventReceiverTest` | Each DCSA event the operator can send, a repeat applied once and one overtaken by a later event not applied, including a position, a stale acceptance and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
 | `PortCallEventPublisherTest` | What the feed publishes, its filters and its cursor |
 | `PortViewServiceTest` | The console's views after real scheduling |
 | `PortCallEventsControllerTest`, `VesselOperatorControllerTest`, `ConsoleControllerTest` | The JSON each endpoint returns, including the `404` and `400` cases |
