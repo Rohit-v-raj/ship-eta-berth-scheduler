@@ -9,11 +9,10 @@ import { ArrivalsTable } from './ArrivalsTable'
 import { BerthTimeline } from './BerthTimeline'
 import { KpiStrip } from './KpiStrip'
 import { MaintenancePanel } from './MaintenancePanel'
+import { PLAN_RANGES, planPeriod, rangeLabel } from './timelineLayout'
 import { VisitDrawer } from './VisitDrawer'
 
 const PortMap = lazy(() => import('@/features/map/PortMap'))
-
-const RANGES = [12, 24, 48]
 
 /**
  * The planner's page. It answers one question: is the berth plan safe for the
@@ -32,13 +31,10 @@ export function HarbourPage() {
   const visits = useMemo(() => visitsQuery.data ?? [], [visitsQuery.data])
   const waiting = useMemo(() => visits.filter((v) => standingOf(v) === STANDING.WAITING), [visits])
 
-  // The plan is fetched for a window that moves on the hour, so the request stays the same between ticks.
+  // The plan is fetched for the span shown, in a window that moves on the hour, so the request stays the same between ticks.
   const { now } = useTime()
   const hourStart = Math.floor(now.getTime() / HOUR) * HOUR
-  const range = useMemo(
-    () => ({ from: new Date(hourStart - 6 * HOUR).toISOString(), to: new Date(hourStart + 50 * HOUR).toISOString() }),
-    [hourStart],
-  )
+  const range = useMemo(() => planPeriod(hourStart, hours), [hourStart, hours])
   const planQuery = useBerthPlan(range)
   const maintenance = useMaintenance().data
 
@@ -58,10 +54,18 @@ export function HarbourPage() {
           title="Berth plan"
           hint="Who holds each berth, and until when"
           actions={
-            <div role="group" aria-label="Hours ahead" className="flex rounded-md border border-line-strong p-0.5">
-              {RANGES.map((value) => (
-                <Button key={value} size="sm" variant={value === hours ? 'primary' : 'ghost'} aria-pressed={value === hours} onClick={() => setHours(value)} className="h-6 border-0">
-                  {value} h
+            <div role="group" aria-label="Time ahead" className="flex rounded-md border border-line-strong p-0.5">
+              {PLAN_RANGES.map((value) => (
+                <Button
+                  key={value}
+                  size="sm"
+                  variant={value === hours ? 'primary' : 'ghost'}
+                  aria-pressed={value === hours}
+                  aria-label={`Next ${rangeLabel(value, { long: true })}`}
+                  onClick={() => setHours(value)}
+                  className="h-6 border-0"
+                >
+                  {rangeLabel(value)}
                 </Button>
               ))}
             </div>

@@ -55,6 +55,11 @@ joins when it would arrive to when it is asked to arrive:
 that gap is the time it would otherwise spend at anchor, and the time a slower
 passage can use up instead. Maintenance is a hatched block on its berth's
 lane, and a berth under maintenance now says "maint. to 16:00".
+The buttons above the plan choose how far ahead it looks: 12, 24 or 48 hours,
+or 3, 7 or 14 days. Seven days is the scheduler's booking horizon, so every
+booking is in view; fourteen days also places the ships still in line at
+their own estimates. Over a span of days the time axis marks midnights, every
+day or every other day, so its labels stay apart.
 
 **Visit** shows the four arrival times side by side, the last position the
 ship gave, and the ledger: every time anyone reported, who reported it and
@@ -76,7 +81,17 @@ button; whether to cancel is left to the planner.
    arrival in large type. Under it, the speed that would
    meet that time, worked out by the calculator.
 3. **Your answer.** Accept, propose another time, or omit the call. Once the
-   ship holds a berth: report arrival, then departure.
+   ship holds a berth and has accepted the requested arrival: report arrival,
+   then departure. Before it accepts, the page asks it to accept or propose
+   another time first, the just-in-time order (estimate, request, accept,
+   arrive). The scheduler itself still records an arrival sent over DCSA
+   without an acceptance: the standard treats an actual arrival as the ship's
+   record of a fact. Arrival is also offered only at the ship's turn: while
+   another ship lies at the berth, or one booked ahead of it is still to
+   come, the page names that ship instead ("B2 is booked for DALE first, from
+   11:29. Report arrival at your turn, once it has left."). The scheduler
+   refuses such an arrival, and its view says whose turn comes first
+   (`aheadOnBerth`).
 
 If the terminal cancels the call, this page says so, with the reason, instead
 of going blank. It also says by when the terminal expects the next estimate.
@@ -226,7 +241,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 81 tests
+npm test             # 87 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

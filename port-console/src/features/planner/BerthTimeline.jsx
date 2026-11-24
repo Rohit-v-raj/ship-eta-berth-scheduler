@@ -6,7 +6,7 @@ import { TimeMark } from '@/components/domain'
 import { cn } from '@/lib/cn'
 import { dayClock, HOUR, relative, span } from '@/lib/time'
 import { useElementWidth } from '@/lib/useElementWidth'
-import { BAR_HEIGHT, layoutTimeline, timeTicks } from './timelineLayout'
+import { BAR_HEIGHT, layoutTimeline, rangeLabel, timeTicks } from './timelineLayout'
 
 /**
  * The berth plan against time. One lane per berth, then a lane for the ships
@@ -67,7 +67,7 @@ export function BerthTimeline({ plan, waiting, hours, selectedRef, onSelect }) {
         width={GUTTER + width}
         height={AXIS_HEIGHT + layout.height + 1}
         role="group"
-        aria-label={`Berth plan for the next ${hours} hours`}
+        aria-label={`Berth plan for the next ${rangeLabel(hours, { long: true })}`}
         className="block"
       >
         <defs>

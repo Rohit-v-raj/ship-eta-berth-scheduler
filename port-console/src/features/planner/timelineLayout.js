@@ -18,6 +18,33 @@ const LABEL_CHAR_WIDTH = 8.2
 const LABEL_PADDING = 16
 
 const OPEN = ['PLANNED', 'ACTIVE']
+const HOUR = 3_600_000
+
+/**
+ * How far ahead the berth plan can look, in hours. Every ship due within 7
+ * days holds a booking (the scheduler's booking horizon); 14 days also places
+ * the ships waiting beyond it at their own estimates.
+ */
+export const PLAN_RANGES = [12, 24, 48, 72, 168, 336]
+
+/** A span as the planner reads it: hours up to two days, then days. */
+export function rangeLabel(hours, { long = false } = {}) {
+  if (hours > 48) return long ? `${hours / 24} days` : `${hours / 24} d`
+  return long ? `${hours} hours` : `${hours} h`
+}
+
+/**
+ * The period to fetch for a view of `hours` ahead: from 6 hours back to 2
+ * hours past the view. It moves on the hour, so the request stays the same
+ * between ticks of the clock.
+ */
+export function planPeriod(now, hours) {
+  const hourStart = Math.floor(now / HOUR) * HOUR
+  return {
+    from: new Date(hourStart - 6 * HOUR).toISOString(),
+    to: new Date(hourStart + (hours + 2) * HOUR).toISOString(),
+  }
+}
 
 export function layoutTimeline({ plan, waiting = [], domain, width, now }) {
   const [start, end] = domain
@@ -131,17 +158,18 @@ function maintenanceEndingAfter(windows = [], now) {
 /**
  * Tick times for the axis: whole hours, a step chosen so labels do not crowd.
  * `hourOf` gives the hour of day a time has in the zone being shown, so ticks
- * fall on that zone's round hours rather than the browser's.
+ * fall on that zone's round hours rather than the browser's. Over a span of
+ * days the step is whole days, every tick at that zone's midnight.
  */
 export function timeTicks(domain, width, hourOf, minSpacing = 84) {
   const [start, end] = domain
-  const HOUR = 3_600_000
   const hours = (end - start) / HOUR
   const maxTicks = Math.max(2, Math.floor(width / minSpacing))
-  const step = [1, 2, 3, 6, 12, 24].find((s) => hours / s <= maxTicks) ?? 24
+  const steps = [1, 2, 3, 6, 12, 24, 48, 72, 168]
+  const step = steps.find((s) => hours / s <= maxTicks) ?? steps.at(-1)
   const ticks = []
   for (let t = Math.ceil(start / HOUR) * HOUR; t <= end; t += HOUR) {
-    if (hourOf(t) % step === 0) ticks.push(t)
+    if (step <= 24 ? hourOf(t) % step === 0 : hourOf(t) === 0) ticks.push(t)
   }
-  return ticks
+  return step <= 24 ? ticks : ticks.filter((_, index) => index % (step / 24) === 0)
 }

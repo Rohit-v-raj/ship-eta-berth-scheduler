@@ -138,6 +138,6 @@ class VesselOperatorControllerTest {
         return new VisitView("VV-20261013-AB12CD34",
                 new VesselView("V001", null, null, null, VesselType.GENERAL_CARGO, null, null),
                 actualArrival == null ? VisitPhase.INBOUND : VisitPhase.BERTHED, null, null, 1,
-                null, requestedArrival, null, actualArrival, null, 1397, null, null, null, null, null, null, null, null, null, null, null);
+                null, requestedArrival, null, actualArrival, null, 1397, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 }

@@ -107,8 +107,10 @@ of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
   the largest it has declared being used until then. A ship is given only a
   berth its length, beam and draft fit, and is turned away if it fits none. Berth maintenance is recorded in advance; no ship is given a berth for
   a stay that would run into it, and a ship booked over a new window is planned
-  again around it. Only one ship can be alongside a berth: an arrival
-  reported at a berth another ship still occupies is refused.
+  again around it. Only one ship can be alongside a berth, and each
+  comes in at its turn: an arrival is refused at a berth another ship still
+  occupies, or ahead of a ship booked before it, unless the early ship would
+  be gone before that ship's turn.
 - **A ship that stays longer keeps its berth.** A berth's planned end is a
   typical stay, so about half of all ships run past it. Such a ship is taken
   to be still there, the console flags it, and the planner sets when it is
@@ -333,8 +335,8 @@ sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
 `curl` command, with the answer to expect and how each step lines up with the
 standard.
 
-Java tests (150, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`. Console tests (81): `npm test` from `port-console/`.
+Java tests (153, against a throwaway MySQL schema): `.\gradlew test` from
+`port-scheduler-api/`. Console tests (87): `npm test` from `port-console/`.
 
 ## Data
 

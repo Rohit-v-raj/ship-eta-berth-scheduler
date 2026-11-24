@@ -6,7 +6,7 @@ import { useTime } from '@/app/providers'
 import { Button, Field, InlineError, Input } from '@/components/ui/controls'
 import { ConfirmDialog, Dialog } from '@/components/ui/overlay'
 import { dayClock, fromLocalInput, HOUR, toLocalInput, toMillis } from '@/lib/time'
-import { AGREEMENT, agreementOf, STANDING, standingOf } from '@/lib/visit'
+import { AGREEMENT, agreementOf, STANDING, standingOf, vesselLabel } from '@/lib/visit'
 import { useCan } from '@/session/session'
 
 /**
@@ -14,6 +14,16 @@ import { useCan } from '@/session/session'
  * event: accepting is a planned arrival equal to the requested one, proposing
  * another time is a new estimated arrival, and skipping the call is an omitted
  * port call. The scheduler decides; the screen only shows what it said.
+ *
+ * Arrival is offered only once the ship has accepted the requested time: the
+ * just-in-time order is estimate, request, accept, arrive. The scheduler itself
+ * still records an arrival sent without an acceptance, since a ship really at
+ * the quay has to be recorded.
+ *
+ * Nor is it offered before the ship's turn (`visit.aheadOnBerth`): while
+ * another ship lies at the berth, or one booked ahead of it is still to come
+ * and this stay would not be over before it. The scheduler refuses such an
+ * arrival; an early ship waits.
  */
 export function DecisionBar({ visit, port }) {
   const allowed = useCan('visit.answer')
@@ -27,6 +37,8 @@ export function DecisionBar({ visit, port }) {
   const code = visit.vessel.code
   const standing = standingOf(visit)
   const agreement = agreementOf(visit)
+  const agreedOnBerth = standing === STANDING.RESERVED && agreement === AGREEMENT.AGREED
+  const ahead = visit.aheadOnBerth
 
   const act = async (name, events, label, done) => {
     setBusy(name)
@@ -59,7 +71,7 @@ export function DecisionBar({ visit, port }) {
             <Button size="lg" variant="danger" onClick={() => setDialog('omit')} disabled={busy !== null}>Omit this call</Button>
           </>
         )}
-        {standing === STANDING.RESERVED && (
+        {agreedOnBerth && !ahead && (
           <Button size="lg" onClick={() => act('arrive', [actualArrival(code, new Date())], 'Report arrival at berth', `Arrival at ${visit.berth.berthCode} recorded`)} busy={busy === 'arrive'} disabled={busy !== null}>
             Report arrival at {visit.berth.berthCode}
           </Button>
@@ -70,6 +82,10 @@ export function DecisionBar({ visit, port }) {
           </Button>
         )}
       </div>
+      {standing === STANDING.RESERVED && agreement === AGREEMENT.AWAITING && (
+        <p className="text-sm text-ink-2">Accept the requested arrival, or propose another time, before reporting arrival at {visit.berth.berthCode}.</p>
+      )}
+      {agreedOnBerth && ahead && <p className="text-sm text-ink-2">{waitForTurn(ahead, visit.berth.berthCode, zone, now)}</p>}
       <InlineError>{error}</InlineError>
 
       <ProposeDialog
@@ -97,6 +113,13 @@ export function DecisionBar({ visit, port }) {
       />
     </div>
   )
+}
+
+/** Why the ship cannot report arrival yet: whose turn at the berth comes first. */
+function waitForTurn(ahead, berthCode, zone, now) {
+  const name = vesselLabel({ code: ahead.vesselCode, name: ahead.vesselName })
+  if (ahead.status === 'ACTIVE') return `${name} is still alongside ${berthCode}. Report arrival once it has left.`
+  return `${berthCode} is booked for ${name} first, from ${dayClock(ahead.plannedStart, zone, now)}. Report arrival at your turn, once it has left.`
 }
 
 /** The scheduler's refusals are exact but terse; say what to do about the common one. */
