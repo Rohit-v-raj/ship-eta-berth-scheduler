@@ -106,6 +106,7 @@ project's own choices, set in `application.properties`.
 |---|---|
 | `POST /events` (subscriber endpoint) and `GET /events` (publisher endpoint) | Both implemented, at `/api/port-call/v2/events` |
 | `Event` with `portCall`, `terminalCall`, `portCallService`, `vessel`, `timestamp` | Same names and nesting. `eventID`s are stable UUIDs |
+| `eventID`, `eventUpdatedDateTime` on an incoming event | Read. An event already applied is not applied again (`INFO`); an estimate or omitted call sent before the vessel's latest event is not applied (`WARN`); a time more than 5 minutes ahead is refused (step 20) |
 | `timestamp.classifierCode` `EST` / `REQ` / `PLN` / `ACT`, `serviceDateTime` | Same. Times are UTC |
 | `portCallServiceTypeCode` `BERTH`, event type `ARRI` / `DEPA`, phase `INBD` / `OUTB`, facility `BRTH` | Same codes. Only the `BERTH` service is acted on; others are answered "not processed" |
 | `vessel.vesselIMONumber`, `vesselMMSINumber`, `vesselName`, `vesselTypeCode` | A vessel is matched by IMO number, then MMSI, then name |
@@ -1199,6 +1200,36 @@ No call is opened and no vessel record is left behind:
 - An arrival at a berth where another ship still lies is refused too: step 22
   shows it.
 
+**Repeated and out-of-order messages.** Messages arrive at least once and in
+no promised order. Each event may carry the standard's `eventID` and
+`eventUpdatedDateTime` (when the sender made it); the console's events always
+do. Captured on 24 Nov 2026, for a ship that sent an estimate ten minutes
+earlier:
+
+| The ship sends | Answer |
+|---|---|
+| the same event again (same `eventID`) | `INFO`: `Already received at 2026-11-24T05:18:07.425250Z; this event was applied then and is not applied again`. Nothing changes |
+| the same `eventID` with a later `eventUpdatedDateTime` and a new time | `{}`: an update of the event, applied |
+| an estimate made 20 minutes ago that arrives only now, after the one above | `WARN`: `Not applied: this event was sent at 2026-11-24T04:58:08Z, before the latest event from this vessel, sent at 2026-11-24T05:17:08Z, which overtook it`. The plan is unchanged |
+| an omitted call made 30 minutes ago that arrives only now | `WARN`, the same reason. The call stays open |
+| an `eventUpdatedDateTime` an hour ahead of the terminal's clock | `ERROR`: `eventUpdatedDateTime cannot be in the future: 2026-11-24T06:18:10Z has not happened yet` |
+
+After the ship omits its call, an estimate made two minutes before the
+omission and delivered afterwards is not applied either, so it opens no new
+call.
+
+- Only estimates and omitted calls are put in order. A planned arrival must
+  equal the requested time, and an actual time is checked against the call's
+  state (a second departure meets a closed call), so a stale one of those is
+  refused already.
+- An event without `eventUpdatedDateTime` cannot be put in order: it is
+  applied as it comes and takes no part in the order. One without `eventID`
+  cannot be recognised as a repeat.
+- **DCSA:** `eventID` is the event's "universal unique identifier", and
+  `eventUpdatedDateTime` is "when the technical event was last updated". Each
+  event is applied in its own transaction, together with the record that it
+  was received.
+
 ### Step 21 — A call far ahead holds no berth yet
 
 Reset the port first. FEDJE sends an estimate sixty days ahead, with every
@@ -1374,6 +1405,9 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `POST` an omitted call, an estimate, or a departure the call's state does not allow | `200`, `ERROR`, saying why (step 20) |
 | `POST` an event naming another port | `200`, `ERROR`: `This terminal is at NOFRO; the event is for …` |
 | `POST` an IMO number that is not 7 digits, an MMSI that is not 9, or a name over 32 characters with neither | `200`, `ERROR` naming the field. No vessel record is created |
+| `POST` an event whose `eventID` was already applied | `200`, `INFO`: `Already received at …`. Not applied again |
+| `POST` an estimate or omitted call sent before the latest event already applied for its vessel | `200`, `WARN`: `Not applied: this event was sent at …, before the latest event from this vessel, …` |
+| `POST` an `eventUpdatedDateTime` more than 5 minutes ahead of the clock | `200`, `ERROR`: `eventUpdatedDateTime cannot be in the future: …` |
 | `POST /api/ships/schedule`, `GET /api/ships/berths`, `POST /api/operator/vessels/X/accept` | `404`. These routes were removed; section 13 says what replaced each |
 
 Two refusals in one request, to see that each is reported against its own
@@ -1455,13 +1489,13 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 143 tests in thirteen classes; needs MySQL, not FastAPI
+.\gradlew test          # 150 tests in thirteen classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
 |---|---|
 | `PortCallEventsControllerTest` | The feed's JSON, headers, paging and error format against the standard |
-| `PortCallEventReceiverTest` | Each incoming event: estimate, position, accept, stale accept, arrival, departure, omit |
+| `PortCallEventReceiverTest` | Each incoming event: a repeat applied once, one overtaken by a later event not applied, estimate, position, accept, stale accept, arrival, departure, omit |
 | `PortCallEventPublisherTest` | What is published, the filters, the cursor, and the two flags for a call that did not take place |
 | `VesselOperatorControllerTest` | The calculator's answer, with and without an open call, and that it stores nothing |
 | `ConsoleControllerTest` | The JSON of every read, of release and of cancel, with their `404`, `409` and `400` answers |
@@ -1473,7 +1507,7 @@ cd port-scheduler-api
 
 ```powershell
 cd port-console
-npm test                # 80 tests; nothing else needs to be running
+npm test                # 81 tests; nothing else needs to be running
 npm run lint
 ```
 

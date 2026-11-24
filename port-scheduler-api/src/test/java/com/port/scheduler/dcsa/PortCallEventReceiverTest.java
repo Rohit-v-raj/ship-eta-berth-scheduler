@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
@@ -242,6 +243,107 @@ class PortCallEventReceiverTest {
         assertThat(visits.findAll()).isEmpty();
     }
 
+    // ---- repeated and out-of-order events (backlog case 9)
+
+    @Test
+    void aRepeatedEventIsAppliedOnceAndAnUpdateOfItIsApplied() {
+        UUID id = UUID.randomUUID();
+        Instant sent = Instant.now().minus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.SECONDS);
+        assertThat(receiver.receive(List.of(estimate(id, sent, ETA)))).isEmpty();
+
+        List<FeedbackElement> again = receiver.receive(List.of(estimate(id, sent, ETA.plus(Duration.ofHours(2)))));
+
+        assertThat(again).singleElement().satisfies(f -> {
+            assertThat(f.severity()).isEqualTo("INFO");
+            assertThat(f.message()).startsWith("Already received at").endsWith("is not applied again");
+        });
+        assertThat(visits.findAll().get(0).getEtaBerth()).isEqualTo(ETA);
+
+        // the same event, updated later: applied
+        assertThat(receiver.receive(List.of(estimate(id, sent.plusSeconds(60), ETA.plus(Duration.ofHours(2)))))).isEmpty();
+        assertThat(visits.findAll().get(0).getEtaBerth()).isEqualTo(ETA.plus(Duration.ofHours(2)));
+    }
+
+    @Test
+    void anEstimateSentBeforeTheLatestOneIsNotAppliedWhenItArrivesLate() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        receiver.receive(List.of(estimate(UUID.randomUUID(), now.minus(Duration.ofMinutes(5)), ETA)));
+
+        List<FeedbackElement> late = receiver.receive(List.of(
+                estimate(UUID.randomUUID(), now.minus(Duration.ofMinutes(10)), ETA.plus(Duration.ofHours(3)))));
+
+        assertThat(late).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(tuple("WARN",
+                "Not applied: this event was sent at " + now.minus(Duration.ofMinutes(10))
+                        + ", before the latest event from this vessel, sent at " + now.minus(Duration.ofMinutes(5))
+                        + ", which overtook it"));
+        assertThat(visits.findAll().get(0).getEtaBerth()).isEqualTo(ETA);
+    }
+
+    @Test
+    void anOmittedCallSentBeforeANewerEstimateDoesNotCancelTheCall() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        receiver.receive(List.of(estimate(UUID.randomUUID(), now.minus(Duration.ofMinutes(5)), ETA)));
+
+        List<FeedbackElement> late = receiver.receive(List.of(omit(UUID.randomUUID(), now.minus(Duration.ofMinutes(10)))));
+
+        assertThat(late).extracting(FeedbackElement::severity).containsExactly("WARN");
+        assertThat(visits.findAll()).singleElement()
+                .satisfies(v -> assertThat(v.getPhase()).isEqualTo(VisitPhase.INBOUND));
+    }
+
+    @Test
+    void anEstimateSentBeforeTheShipLeftOpensNoNewCallWhenItArrivesAfterwards() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        Instant arrived = now.minus(Duration.ofHours(2));
+        receiver.receive(List.of(
+                estimate(UUID.randomUUID(), now.minus(Duration.ofHours(3)), arrived),
+                berthEvent(UUID.randomUUID(), arrived, "ARRI", "ACT", arrived),
+                berthEvent(UUID.randomUUID(), now.minus(Duration.ofHours(1)), "DEPA", "ACT", now.minus(Duration.ofHours(1)))));
+
+        List<FeedbackElement> late = receiver.receive(List.of(
+                estimate(UUID.randomUUID(), now.minus(Duration.ofMinutes(150)), ETA)));
+
+        assertThat(late).extracting(FeedbackElement::severity).containsExactly("WARN");
+        assertThat(visits.findAll()).singleElement()
+                .satisfies(v -> assertThat(v.getPhase()).isEqualTo(VisitPhase.DEPARTED));
+    }
+
+    @Test
+    void aSendersTimeFromTheFutureIsRefused() {
+        List<FeedbackElement> feedback = receiver.receive(List.of(
+                estimate(UUID.randomUUID(), Instant.now().plus(Duration.ofHours(1)), ETA)));
+
+        assertThat(feedback).singleElement().satisfies(f -> {
+            assertThat(f.severity()).isEqualTo("ERROR");
+            assertThat(f.message()).startsWith("eventUpdatedDateTime cannot be in the future");
+        });
+        assertThat(visits.findAll()).isEmpty();
+    }
+
+    @Test
+    void aBatchSentAgainIsAnsweredEventByEventAndChangesNothing() {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        List<Event> batch = List.of(
+                estimate(UUID.randomUUID(), now.minus(Duration.ofMinutes(2)), ETA),
+                omit(UUID.randomUUID(), now.minus(Duration.ofMinutes(1))));
+        assertThat(receiver.receive(batch)).isEmpty();
+        assertThat(visits.findAll().get(0).getPhase()).isEqualTo(VisitPhase.CANCELLED);
+
+        // before, the omitted call sent again was an ERROR: the vessel had no open visit
+        assertThat(receiver.receive(batch)).extracting(FeedbackElement::severity, FeedbackElement::propertyPath)
+                .containsExactly(tuple("INFO", "$.events[0]"), tuple("INFO", "$.events[1]"));
+        assertThat(visits.findAll()).hasSize(1);
+    }
+
+    @Test
+    void eventsWithNoIdOrTimeAreAppliedAsTheyCome() {
+        receiver.receive(List.of(berth("ARRI", "EST", ETA)));
+
+        // no id to recognise a repeat, no time to order by: applied, as before
+        assertThat(receiver.receive(List.of(berth("ARRI", "EST", ETA.plus(Duration.ofHours(1)))))).isEmpty();
+        assertThat(visits.findAll().get(0).getEtaBerth()).isEqualTo(ETA.plus(Duration.ofHours(1)));
+    }
+
     @Test
     void aSizeGivenWithAnEstimateIsKeptInMetresAndAVesselThatFitsNoBerthIsRefused() {
         PortCallMessages.Vessel inFeet = new PortCallMessages.Vessel("9321483", null, "King of the Seas", null, "CONT",
@@ -292,6 +394,21 @@ class PortCallEventReceiverTest {
         return new Event(null, null, null, null, null,
                 new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), reporting,
                 new Timestamp("EST", ETA, null));
+    }
+
+    /** An estimated arrival from SHIP with the sender's id and time. */
+    private static Event estimate(UUID id, Instant sent, Instant eta) {
+        return berthEvent(id, sent, "ARRI", "EST", eta);
+    }
+
+    private static Event berthEvent(UUID id, Instant sent, String eventType, String classifier, Instant time) {
+        return new Event(id, null, sent, null, null,
+                new PortCallService(null, "BERTH", eventType, null, "BRTH", null, null), SHIP,
+                new Timestamp(classifier, time, null));
+    }
+
+    private static Event omit(UUID id, Instant sent) {
+        return new Event(id, null, sent, new PortCall(null, null, "NOFRO", true), null, null, SHIP, null);
     }
 
     private static Event berth(String eventType, String classifier, Instant time) {

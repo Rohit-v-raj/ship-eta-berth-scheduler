@@ -56,8 +56,17 @@ function sizeOf(size) {
 
 const iso = (time) => new Date(time).toISOString()
 
+/**
+ * Every event carries its own id and the time it was made, as the standard
+ * provides: the terminal applies an event it has seen before only once, and
+ * does not apply an estimate or an omitted call that a later event from the
+ * same ship has overtaken.
+ */
+const identity = () => ({ eventID: crypto.randomUUID(), eventUpdatedDateTime: new Date().toISOString() })
+
 function berthEvent(vesselCode, eventType, classifierCode, time, vesselTypeCode, position, size) {
   return {
+    ...identity(),
     vessel: vesselOf(vesselCode, vesselTypeCode, position, size),
     portCallService: {
       portCallServiceTypeCode: 'BERTH',
@@ -88,6 +97,7 @@ export const actualDeparture = (vesselCode, time) => berthEvent(vesselCode, 'DEP
 
 /** The ship will not call after all. */
 export const omittedCall = (vesselCode, unLocode) => ({
+  ...identity(),
   vessel: vesselOf(vesselCode),
   portCall: { ...(unLocode ? { UNLocationCode: unLocode } : {}), isOmitted: true },
 })
