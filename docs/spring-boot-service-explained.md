@@ -134,7 +134,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 150 tests in thirteen classes (§10)
+    └── test/java/com/port/scheduler/        # 153 tests in thirteen classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -575,12 +575,19 @@ Key ideas:
 - **Of two berths equally soon, the one with most time in hand.** When a ship
   could start as soon on two berths, it is placed on the one whose ship before
   it leaves first.
-- **One ship alongside a berth.** `arrive` refuses an arrival at a berth where
-  another ship is still recorded alongside ("B3 still has KVITSOY alongside;
-  its departure is recorded first"). A ship that arrives before others booked
-  ahead of it on its berth is taken in, and they are planned after it.
-  `release` acts only on the ship alongside; a berth with only bookings
-  answers `false` and records nothing.
+- **One ship alongside a berth, each at its turn.** `arrive` refuses an
+  arrival at a berth where another ship is still recorded alongside ("B3 still
+  has KVITSOY alongside; its departure is recorded first"). It also refuses a
+  ship that comes before its turn (`BerthTurn`): while a ship booked ahead of
+  it on the berth is still to come, an early ship is taken in only if its stay
+  and the turnaround end before that booking starts, so the ship booked first
+  is never delayed ("B2 is booked for DALE from …, ahead of this vessel's turn
+  at …"). This is the practice of ports that book berthing windows: at Napier
+  Port an early ship "can only occupy the berth if it is vacant and it doesn't
+  impact on any other window arrangement". `VisitView.aheadOnBerth` names the
+  ship it waits for, worked out on read, and the console shows it in place of
+  *Report arrival*. `release` acts only on the ship alongside; a berth with
+  only bookings answers `false` and records nothing.
 - **What a ship reports is checked against its call.** A ship alongside cannot
   omit its call or send a new estimated arrival; a departure needs an arrival,
   may not be dated before it, and is recorded at the time the ship sent, as
@@ -844,13 +851,13 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 150 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 153 tests):
 
 | Test class | What it proves |
 |---|---|
 | `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a second ship alongside a berth while allowing several bookings |
 | `BerthSchedulingTest` | Fill, book behind, release, move, accept, omit and replan; booked ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind; the booking horizon; overstays; reports checked against the call (omit or estimate while alongside, departure without or before arrival, actual times in the future, an estimate sent again). All through the real services and a real database |
-| `PortCallEventReceiverTest` | Each DCSA event the operator can send, a repeat applied once and one overtaken by a later event not applied, including a position, a stale acceptance and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
+| `PortCallEventReceiverTest` | Each DCSA event the operator can send, a repeat applied once and one overtaken by a later event not applied, including a position, a stale acceptance, an arrival before the ship's turn and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
 | `PortCallEventPublisherTest` | What the feed publishes, its filters and its cursor |
 | `PortViewServiceTest` | The console's views after real scheduling |
 | `PortCallEventsControllerTest`, `VesselOperatorControllerTest`, `ConsoleControllerTest` | The JSON each endpoint returns, including the `404` and `400` cases |
@@ -858,7 +865,7 @@ The same behaviour is covered by automated tests (`.\gradlew test`, 150 tests):
 | `EtaServiceTest` | The model service client gives up in time when the service is down or accepts and never answers |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production (the other scheduling tests run without it so their times stay plain sums) |
 | `VesselSizeTest` | Length and beam required once per ship and kept on record; the largest draft kept and used for the fit; the draft due a day before arrival |
-| `BerthSequenceTest` | Several ships per berth: the gap before a booking used without delaying it, a booking held up behind an overstay moving to a berth more than 4 hours sooner or staying, a ship moved for maintenance keeping its claim, a late ship giving its place to the one behind, arrivals at an occupied berth and ahead of turn |
+| `BerthSequenceTest` | Several ships per berth: the gap before a booking used without delaying it, a booking held up behind an overstay moving to a berth more than 4 hours sooner or staying, a ship moved for maintenance keeping its claim, a late ship giving its place to the one behind, arrivals at an occupied berth and before the ship's turn refused, an early ship gone before the next booking taken in |
 
 The ones that touch the database need MySQL running. They use a separate
 schema, `port_core_test`, which is wiped and rebuilt on every run, and they

@@ -59,6 +59,7 @@ export function makeVisits(now = Date.now()) {
       arrivalDraftMeters: null,
       overstayingSince: null,
       draftDueSince: null,
+      aheadOnBerth: null,
     },
     {
       visitRef: 'VV-20261013-SOLV0002',
@@ -84,6 +85,7 @@ export function makeVisits(now = Date.now()) {
       arrivalDraftMeters: null,
       overstayingSince: null,
       draftDueSince: null,
+      aheadOnBerth: null,
     },
     {
       visitRef: 'VV-20261013-HAVB0003',
@@ -109,6 +111,7 @@ export function makeVisits(now = Date.now()) {
       arrivalDraftMeters: null,
       overstayingSince: null,
       draftDueSince: null,
+      aheadOnBerth: null,
     },
   ]
 }

@@ -14,6 +14,7 @@ import com.port.scheduler.entity.visit.VesselVisit;
 import com.port.scheduler.entity.visit.VisitPhase;
 import com.port.scheduler.repository.VesselRepository;
 import com.port.scheduler.repository.VesselVisitRepository;
+import com.port.scheduler.model.view.VisitView;
 import com.port.scheduler.model.view.VisitView.PositionReport;
 import com.port.scheduler.service.PortViewService;
 import com.port.scheduler.support.PersistenceTest;
@@ -107,6 +108,31 @@ class PortCallEventReceiverTest {
         assertThat(feedback).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
                 tuple("ERROR", "B1 still has IMO9321483 alongside; its departure is recorded first"));
         assertThat(views.visits("SECOND", false).get(0).phase()).isEqualTo(VisitPhase.INBOUND);
+    }
+
+    @Test
+    void anArrivalBeforeTheVesselsTurnIsReportedAgainstItsEventAndChangesNothing() {
+        receiver.receive(List.of(berth("ARRI", "EST", ETA), estimateFor(named(null, null, "FILL-2")),
+                estimateFor(named(null, null, "FILL-3")), estimateFor(named(null, null, "FILL-4"))));
+        PortCallMessages.Vessel second = named(null, null, "SECOND");
+        receiver.receive(List.of(estimateFor(second)));   // every berth is booked six hours out: after one of them
+        VisitView booked = views.visits("SECOND", false).get(0);
+        assertThat(booked.aheadOnBerth()).isNotNull();
+
+        List<FeedbackElement> feedback = receiver.receive(List.of(new Event(null, null, null, null, null,
+                new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), second,
+                new Timestamp("ACT", Instant.now().truncatedTo(ChronoUnit.SECONDS), null))));
+
+        assertThat(feedback).singleElement().satisfies(element -> {
+            assertThat(element.severity()).isEqualTo("ERROR");
+            assertThat(element.message())
+                    .startsWith(booked.berth().berthCode() + " is booked for " + booked.aheadOnBerth().vesselCode())
+                    .endsWith("a vessel comes in out of turn only when its stay ends before the next booking");
+        });
+        VisitView after = views.visits("SECOND", false).get(0);
+        assertThat(after.phase()).isEqualTo(VisitPhase.INBOUND);
+        assertThat(after.ataBerth()).isNull();
+        assertThat(after.berth()).isEqualTo(booked.berth());
     }
 
     @Test

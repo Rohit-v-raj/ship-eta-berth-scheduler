@@ -9,6 +9,7 @@ import com.port.scheduler.entity.visit.VisitPhase;
 import com.port.scheduler.entity.vessel.VesselType;
 import com.port.scheduler.exceptions.VisitConflictException;
 import com.port.scheduler.model.view.VisitView;
+import com.port.scheduler.model.view.VisitView.Ahead;
 import com.port.scheduler.repository.BerthAllocationRepository;
 import com.port.scheduler.repository.VesselVisitRepository;
 import com.port.scheduler.repository.VisitEventRepository;
@@ -34,7 +35,8 @@ import static org.assertj.core.api.Assertions.within;
  * 5, owner's decisions of 2026-11-23): a ship due soon uses the gap before a
  * booking without delaying it, a booking held up by the ship before it moves
  * to a berth that can take it much sooner, and a ship reports its arrival
- * only at a berth no one else lies at. On the four seeded berths: B1 and B2
+ * only at its turn: at a berth no one else lies at, and before a ship booked
+ * ahead of it only if it is gone by then. On the four seeded berths: B1 and B2
  * take ships up to 190 m, B3 and B4 up to 140 m.
  */
 @PersistenceTest
@@ -208,18 +210,60 @@ class BerthSequenceTest {
     }
 
     @Test
-    void aShipThatArrivesBeforeTheOneAheadOfItIsTakenInAndTheOtherIsPlannedAfterIt() {
+    void aShipBookedBehindOneAlongsideIsShownItWaitsForItsDeparture() {
+        alongsideB1AndTheOthersBooked();
+        scheduledIn("V005", Duration.ofMinutes(10));   // B1, after V001
+
+        assertThat(viewOf("V005").aheadOnBerth()).extracting(Ahead::vesselCode, Ahead::status)
+                .containsExactly("V001", AllocationStatus.ACTIVE);
+        assertThat(viewOf("V002").aheadOnBerth()).isNull();   // first in line on B2
+
+        berthService.release("B1");
+
+        assertThat(viewOf("V005").aheadOnBerth()).isNull();
+    }
+
+    @Test
+    void aShipThatArrivesBeforeItsTurnIsRefusedNamingTheShipAhead() {
         List.of("V001", "V002", "V003", "V004").forEach(v -> scheduledIn(v, Duration.ofHours(2)));
         scheduledIn("V005", Duration.ofHours(1));   // B1, after V001
         assertThat(lineOf("B1")).containsExactly("V001", "V005");
+        Instant v001Turn = windowOf("V001").getPlannedStart();
+        Instant v005Turn = windowOf("V005").getPlannedStart();
+        assertThat(viewOf("V005").aheadOnBerth()).extracting(Ahead::vesselCode, Ahead::status, Ahead::plannedStart)
+                .containsExactly("V001", AllocationStatus.PLANNED, v001Turn);
 
-        visitService.arrived("V005", Instant.now());
+        assertThatThrownBy(() -> visitService.arrived("V005", Instant.now()))
+                .isInstanceOf(VisitConflictException.class)
+                .hasMessage("B1 is booked for V001 from " + v001Turn + ", ahead of this vessel's turn at " + v005Turn
+                        + "; a vessel comes in out of turn only when its stay ends before the next booking");
 
-        assertThat(lineOf("B1")).containsExactly("V005", "V001");
-        assertThat(windowOf("V005").getStatus()).isEqualTo(AllocationStatus.ACTIVE);
-        assertThat(windowOf("V001").getPlannedStart()).isEqualTo(windowOf("V005").getPlannedEnd());
-        assertThat(requestsTo("V001")).hasSize(2).last()
-                .satisfies(e -> assertThat(e.getRemarks()).startsWith("Berth expected free"));
+        // nothing moves: V005 is still on its way, and V001 keeps its turn and is told nothing new
+        assertThat(visitOf("V005").getPhase()).isEqualTo(VisitPhase.INBOUND);
+        assertThat(visitOf("V005").getAtaBerth()).isNull();
+        assertThat(lineOf("B1")).containsExactly("V001", "V005");
+        assertThat(requestsTo("V001")).hasSize(1);
+        assertThat(viewOf("V001").aheadOnBerth()).isNull();
+    }
+
+    @Test
+    void anEarlyShipWhoseStayEndsBeforeTheNextBookingIsTakenIn() {
+        sized("ALDA", Duration.ofDays(5));   // B1, five days out
+        sized("BRIS", Duration.ofDays(5));   // B2
+        sized("CORA", Duration.ofDays(6));   // after one of them
+        String berth = viewOf("CORA").berth().berthCode();
+        String passed = lineOf(berth).get(0);
+        assertThat(lineOf(berth)).containsExactly(passed, "CORA");
+        Instant passedAsked = visitOf(passed).getRtaBerth();
+        // CORA would be gone days before the ship booked ahead of it is due
+        assertThat(viewOf("CORA").aheadOnBerth()).isNull();
+
+        visitService.arrived("CORA", Instant.now());
+
+        assertThat(windowOf("CORA").getStatus()).isEqualTo(AllocationStatus.ACTIVE);
+        assertThat(lineOf(berth)).containsExactly("CORA", passed);
+        assertThat(visitOf(passed).getRtaBerth()).isEqualTo(passedAsked);
+        assertThat(requestsTo(passed)).hasSize(1);
     }
 
     /** V001 alongside B1 since now, for a typical stay; V002 to V004 booked on B2 to B4 from two hours out. */
@@ -253,6 +297,10 @@ class BerthSequenceTest {
     private List<VisitEvent> requestsTo(String vesselId) {
         return events.findLedger(visitOf(vesselId)).stream()
                 .filter(e -> e.getClassifier() == TimeClassifier.REQUESTED).toList();
+    }
+
+    private VisitView viewOf(String vesselId) {
+        return views.visits(vesselId, false).get(0);
     }
 
     private VesselVisit visitOf(String vesselId) {

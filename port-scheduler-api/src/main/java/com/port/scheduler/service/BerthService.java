@@ -177,10 +177,13 @@ public class BerthService {
     /**
      * The vessel is alongside: the allocation becomes active and the visit
      * berthed. Its stay counts from this moment, not from its estimate, so the
-     * berth's planned end moves with an early or a late arrival. Refused while
-     * another vessel is still recorded alongside the berth. A vessel that
-     * arrives before others booked ahead of it on the berth is taken in, and
-     * they are planned after it.
+     * berth's planned end moves with an early or a late arrival.
+     *
+     * The vessel comes in at its turn ({@link BerthTurn}). Refused while
+     * another vessel is still recorded alongside the berth, and while a vessel
+     * booked ahead of it on the berth is still to come, unless its stay and
+     * the turnaround end before that booking starts: an early arrival never
+     * delays a vessel booked first.
      */
     @Transactional
     public void arrive(VesselVisit visit, Instant at) {
@@ -188,12 +191,17 @@ public class BerthService {
         BerthAllocation allocation = allocationRepository.findByVisitAndStatusIn(visit, AllocationStatus.OPEN)
                 .orElseThrow(() -> new VisitConflictException("The vessel has no berth allocated yet"));
         Berth berth = allocation.getBerth();
-        allocationRepository.findByBerthAndStatus(berth, AllocationStatus.ACTIVE)
-                .filter(other -> !other.getId().equals(allocation.getId()))
-                .ifPresent(other -> {
-                    throw new VisitConflictException(berth.getCode() + " still has "
-                            + other.getVisit().getVessel().getCode() + " alongside; its departure is recorded first");
-                });
+        List<BerthAllocation> onBerth = allocationRepository.findByBerthAndStatusIn(berth, AllocationStatus.OPEN);
+        BerthTurn.ahead(allocation, onBerth, at, stay(visit), turnaround).ifPresent(other -> {
+            String vessel = other.getVisit().getVessel().getCode();
+            if (other.getStatus() == AllocationStatus.ACTIVE) {
+                throw new VisitConflictException(berth.getCode() + " still has " + vessel
+                        + " alongside; its departure is recorded first");
+            }
+            throw new VisitConflictException(berth.getCode() + " is booked for " + vessel + " from "
+                    + other.getPlannedStart() + ", ahead of this vessel's turn at " + allocation.getPlannedStart()
+                    + "; a vessel comes in out of turn only when its stay ends before the next booking");
+        });
         allocation.setStatus(AllocationStatus.ACTIVE);
         allocation.setActualStart(at);
         allocation.setPlannedEnd(at.plus(stay(visit)));
@@ -864,7 +872,8 @@ public class BerthService {
         return berthRepository.findInServiceForUpdate(OperationalStatus.ACTIVE);
     }
 
-    private static Duration stay(VesselVisit visit) {
+    /** How long a vessel is planned to stay alongside: the time declared for the call, else the typical stay for its type. */
+    static Duration stay(VesselVisit visit) {
         Integer minutes = visit.getPlannedServiceMinutes();
         return minutes != null ? Duration.ofMinutes(minutes) : PlanningRules.typicalStay(visit.getVessel().getType());
     }

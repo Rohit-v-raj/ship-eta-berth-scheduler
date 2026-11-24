@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeBerthPlan, makeVisits } from '@/test/fixtures'
-import { layoutTimeline, timeTicks } from './timelineLayout'
+import { layoutTimeline, planPeriod, rangeLabel, timeTicks } from './timelineLayout'
 
 const HOUR = 3_600_000
 const now = Date.parse('2026-10-13T12:00:00Z')
@@ -140,9 +140,39 @@ describe('timeTicks', () => {
     expect(ticks.map((t) => new Date(t).toISOString().slice(11, 16))).toEqual(['12:00', '18:00', '00:00', '06:00'])
   })
 
+  it('steps by whole days, at midnight, over a week', () => {
+    // 3 hours back and 7 days ahead on 720 px: room for eight labels, one a day
+    const ticks = timeTicks([now - 3 * HOUR, now + 168 * HOUR], 720, hourOfUtc)
+    expect(ticks.map((t) => new Date(t).toISOString().slice(5, 16))).toEqual(
+      ['10-14T00:00', '10-15T00:00', '10-16T00:00', '10-17T00:00', '10-18T00:00', '10-19T00:00', '10-20T00:00'],
+    )
+  })
+
+  it('skips days over two weeks, so the labels stay apart', () => {
+    const ticks = timeTicks([now - 3 * HOUR, now + 336 * HOUR], 720, hourOfUtc)
+    expect(ticks).toHaveLength(7)
+    expect(ticks.every((t) => hourOfUtc(t) === 0)).toBe(true)
+    expect(ticks.slice(1).map((t, i) => (t - ticks[i]) / HOUR)).toEqual([48, 48, 48, 48, 48, 48])
+  })
+
   it('puts ticks on round hours of the zone being shown', () => {
     const osloHour = (ms) => (new Date(ms).getUTCHours() + 2) % 24
     const ticks = timeTicks(domain, width, osloHour)
     expect(ticks.every((t) => osloHour(t) % 6 === 0)).toBe(true)
+  })
+})
+
+describe('the span shown', () => {
+  it('is fetched from six hours back to two hours past the view, on the hour', () => {
+    expect(planPeriod(Date.parse('2026-10-13T12:34:56Z'), 168)).toEqual({
+      from: '2026-10-13T06:00:00.000Z',
+      to: '2026-10-20T14:00:00.000Z',
+    })
+  })
+
+  it('is named in hours up to two days, then in days', () => {
+    expect([12, 24, 48, 72, 168, 336].map((hours) => rangeLabel(hours))).toEqual(['12 h', '24 h', '48 h', '3 d', '7 d', '14 d'])
+    expect(rangeLabel(168, { long: true })).toBe('7 days')
+    expect(rangeLabel(48, { long: true })).toBe('48 hours')
   })
 })

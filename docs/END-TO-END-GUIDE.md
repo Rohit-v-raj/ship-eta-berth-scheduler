@@ -396,7 +396,7 @@ curl -s "$API/api/visits?vessel=NORDVIK"
   "lastReport":{"reportedAt":"2026-11-23T06:18:09.377456Z","lat":61.62,"lon":4.4,"distanceNm":19.13,"estimatedArrival":"2026-11-23T10:05:02.980252Z"},
   "requestedAt":"2026-11-23T06:18:09.398411Z","answerDueAt":"2026-11-23T07:18:09.398411Z","cancelledBy":null,"remarks":null,
   "estimateDueSince":null,"nextEstimateBy":null,"notArrivedSince":null,"arrivalDraftMeters":null,"overstayingSince":null,
-  "draftDueSince":"2026-11-22T10:05:02.980252Z"}]
+  "draftDueSince":"2026-11-22T10:05:02.980252Z","aheadOnBerth":null}]
 ```
 
 **What to notice.**
@@ -421,6 +421,9 @@ curl -s "$API/api/visits?vessel=NORDVIK"
   and NORDVIK arrives within the day, so `draftDueSince` is set: the console
   shows "Draft due". Until a draft comes, the largest the ship has ever
   declared is used to check the fit.
+- `aheadOnBerth` names the ship whose turn on the berth comes first, while
+  an arrival now would be refused (step 23). NORDVIK is first on `B1`, so it
+  is `null`.
 - `plannedEnd` is 1,397 minutes (0.97 days) after the start: the typical stay
   for this vessel type, from published UNCTAD medians.
 - `lastReport` is the position sent in step 4.
@@ -1370,6 +1373,69 @@ operations ... will be completed". In a full terminal operating system it is
 forecast from the moves left and the cranes on the ship; here the planner
 types it.
 
+### Step 23 — An early ship waits its turn
+
+Reset the port first. Ships 180 m long fit only `B1` and `B2`. HELLESOY is
+alongside `B1`. ASKVOLL is due in three days: it is booked on `B2` and accepts
+the requested arrival. DALE is due in an hour, and is booked on `B2` too, in
+the gap before ASKVOLL: its day alongside ends long before ASKVOLL's window.
+
+```bash
+send() {  # vessel, ARRI or DEPA, EST/PLN/ACT, time
+curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
+{"events":[{"vessel":{"vesselName":"$1","vesselSizeUnit":"MTR","lengthOverall":180,"width":28},
+  "portCallService":{"portCallServiceTypeCode":"BERTH","portCallServiceEventTypeCode":"$2","facilityTypeCode":"BRTH"},
+  "timestamp":{"classifierCode":"$3","serviceDateTime":"$4"}}]}
+EOF
+echo; }
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+send HELLESOY ARRI EST $NOW; send HELLESOY ARRI ACT $NOW
+send ASKVOLL ARRI EST $(date -u -d '+72 hours' +%Y-%m-%dT%H:%M:%SZ)
+send ASKVOLL ARRI PLN $(curl -s "$API/api/visits?vessel=ASKVOLL" | pick "d[0]['rtaBerth']")
+send DALE ARRI EST $(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+```
+
+`B2`'s line is now DALE from `2026-11-24T10:29:51Z`, then ASKVOLL from
+`2026-11-27T09:29:50Z`, agreed. ASKVOLL reports that it is alongside `B2`,
+three days early:
+
+```bash
+send ASKVOLL ARRI ACT $(date -u +%Y-%m-%dT%H:%M:%SZ)
+curl -s "$API/api/visits?vessel=ASKVOLL"
+```
+```json
+{"feedbackElements":[{"severity":"ERROR","message":"B2 is booked for DALE from 2026-11-24T10:29:51Z, ahead of this vessel's turn at 2026-11-27T09:29:50Z; a vessel comes in out of turn only when its stay ends before the next booking","propertyPath":"$.events[0]"}]}
+[{... "vessel":{"code":"ASKVOLL", ...},"phase":"INBOUND", ...
+  "berth":{"berthCode":"B2","berthName":"Berth 2","status":"PLANNED","plannedStart":"2026-11-27T09:29:50Z", ...},
+  ... "ptaBerth":"2026-11-27T09:29:50Z","ataBerth":null, ...
+  "aheadOnBerth":{"vesselCode":"DALE","vesselName":"DALE","status":"PLANNED","plannedStart":"2026-11-24T10:29:51Z"}}]
+```
+
+**What to notice.**
+
+- The arrival is refused and nothing moves: ASKVOLL is still `INBOUND`, and
+  DALE keeps its time and is told nothing new. An early arrival gains nothing
+  over a ship booked before it.
+- `aheadOnBerth` names the ship whose turn comes first. It is worked out each
+  time the view is read. The console's *My vessel* page shows it in place of
+  *Report arrival*: "B2 is booked for DALE first, from 11:29. Report arrival
+  at your turn, once it has left."
+- An early ship is not always refused. One whose stay and the hour's
+  turnaround end before the next booking starts delays no one, and is taken
+  in.
+
+DALE accepts and arrives. ASKVOLL's `aheadOnBerth` becomes DALE with status
+`ACTIVE`, and an arrival now answers `B2 still has DALE alongside; its
+departure is recorded first`. Once DALE reports its departure, `aheadOnBerth`
+is `null`: ASKVOLL is first in line, and its arrival is recorded.
+
+**Ports:** where berthing windows are booked, an early ship waits. Napier
+Port: an early vessel "can only occupy the berth if it is vacant and it
+doesn't impact on any other window arrangement". Ports that serve ships in
+order of arrival count arrival at the anchorage or the pilot station, not at
+the berth. DCSA has events for both (`PILOT_BOARDING_PLACE`, `ANCHORAGE`),
+which this terminal does not act on yet (section 12).
+
 ## 7. What the service refuses, and how
 
 Worth running: a system is as clear in its refusals as in its answers.
@@ -1393,6 +1459,7 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `POST /api/port/berths/{code}/maintenance` over the stay of the ship alongside, or over another window | `409`, saying which. Over a booked ship's window it is accepted, and the ship is planned again (step 18) |
 | `PUT /api/port/berths/{code}/release` for a berth with no ship alongside, even one with bookings | `200`, `"released":false`; nothing is recorded |
 | `POST` an `ACT` arrival at a berth where another ship is still recorded alongside | `200`, `ERROR`: `B3 still has KVITSOY alongside; its departure is recorded first` |
+| `POST` an `ACT` arrival before the ship's turn: a ship booked ahead of it on the berth is still to come, and this stay would not be over before it | `200`, `ERROR`: `B2 is booked for DALE from …, ahead of this vessel's turn at …; a vessel comes in out of turn only when its stay ends before the next booking`. Nothing changes (step 23) |
 | `POST /api/port/berths/{code}/maintenance` ending before it starts, already over, or without `from` or `to` | `400`, saying which: `to must be after from`, `the window must end in the future`, `from: must not be null` |
 | `DELETE /api/port/berths/{code}/maintenance/{id}` with an id that berth does not have | `404` |
 | `PUT /api/visits/{visitRef}/cancel` with a `reason` longer than 400 characters | `400`, `reason: size must be between 0 and 400` |
@@ -1470,8 +1537,8 @@ sent, so you can compare it with this guide.
 | Steps 2, 5, 15 | **Harbour** (planner seat): figures, map, berth plan, arrivals table. Click a vessel for its four times and ledger |
 | Steps 3, 4, 9 | **My vessel** (operator seat, switch seats in the header): fill in the calculator, *Calculate only*, or *Send estimated arrival to the terminal* |
 | Steps 7, 11, 14 | **My vessel**: *Accept requested arrival*, *Propose another time*, *Omit this call* |
-| Step 9 | **Harbour**: the berth plan draws each berth's sequence, one bar per booked ship |
-| Step 10 | **My vessel**: *Report arrival*, *Report departure*. On **Harbour**, a booked ship's requested time, and sometimes its berth, changes by itself |
+| Step 9 | **Harbour**: the berth plan draws each berth's sequence, one bar per booked ship. The buttons above it show 12, 24 or 48 hours, or 3, 7 or 14 days ahead |
+| Step 10 | **My vessel**: *Report arrival* (offered once the requested arrival is accepted, and at the ship's turn: before it, the page names the ship it waits for, step 23), *Report departure*. On **Harbour**, a booked ship's requested time, and sometimes its berth, changes by itself |
 | Step 12 | **Harbour**: open the visit of a ship alongside, *Release berth* |
 | Step 13 | **Harbour**: a late answer shows as "No answer for ..." in the arrivals table and in the *Awaiting the ship's answer* figure. Open the visit of a ship that has not arrived, *Cancel this call*. The ship's own page then says the terminal cancelled it |
 | Steps 6, 16 | **Port call events** |
@@ -1481,6 +1548,7 @@ sent, so you can compare it with this guide.
 | Step 20 | **My vessel**: *Omit this call* and *Propose another time* are not offered once the ship is alongside, and *Report departure* only then; a refusal from the scheduler appears beside the button |
 | Step 21 | **Harbour**: a ship due more than 7 days ahead is listed as in line with no berth; its visit's ledger says "A berth is given within 7 days of arrival". The *Ships booked* figure counts the others |
 | Step 22 | **Harbour**: a ship past its planned end shows "Overstaying, … past planned end"; in its visit, *Expected to leave at* sets the time, above *Release* |
+| Step 23 | **My vessel**: a ship booked behind another sees "B2 is booked for DALE first, from …" where *Report arrival* would be, until that ship has left |
 | Steps 8 to 14 and 19, played for you | **Stories**, the bar at the bottom: *The port fills up*, *A quiet port*, *A change of plan*, *A ship goes quiet*, *A ship falls behind* |
 
 ---
@@ -1489,7 +1557,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 150 tests in thirteen classes; needs MySQL, not FastAPI
+.\gradlew test          # 153 tests in thirteen classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
@@ -1507,7 +1575,7 @@ cd port-scheduler-api
 
 ```powershell
 cd port-console
-npm test                # 81 tests; nothing else needs to be running
+npm test                # 87 tests; nothing else needs to be running
 npm run lint
 ```
 
@@ -1565,6 +1633,12 @@ not been run through DCSA's conformance tests.
   knows the size of. A terminal operating system holds these as vessel master
   data; here they arrive with the first estimate and stay on the vessel
   record.
+- **An actual arrival at the berth is refused before the ship's turn**
+  (step 23). The standard records an actual arrival as the ship's report of a
+  fact; this terminal refuses one at a berth booked for another ship first,
+  since a ship berths when the terminal is ready for it. A ship that is early
+  would report arrival at the anchorage or the pilot boarding place, events
+  this terminal does not act on yet.
 - **One record is both the port call and the terminal call.** The standard
   allows several terminal calls within one port call.
 - **No facility codes.** The demo terminal codes are invented, so no SMDG code

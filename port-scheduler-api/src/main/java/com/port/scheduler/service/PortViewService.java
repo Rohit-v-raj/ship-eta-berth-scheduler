@@ -23,6 +23,7 @@ import com.port.scheduler.model.view.PortView.TerminalView;
 import com.port.scheduler.model.view.VisitDetailView;
 import com.port.scheduler.model.view.VisitDetailView.EventView;
 import com.port.scheduler.model.view.VisitView;
+import com.port.scheduler.model.view.VisitView.Ahead;
 import com.port.scheduler.model.view.VisitView.BerthWindow;
 import com.port.scheduler.model.view.VisitView.PositionReport;
 import com.port.scheduler.model.view.VisitView.VesselView;
@@ -72,6 +73,7 @@ public class PortViewService {
     private final Duration answerWindow;
     private final List<Duration> estimateMilestones;
     private final Duration draftDue;
+    private final Duration turnaround;
 
     public PortViewService(PortRepository portRepository,
                            BerthRepository berthRepository,
@@ -82,8 +84,10 @@ public class PortViewService {
                            BerthMaintenanceRepository maintenanceRepository,
                            @Value("${port.planning.answer-window-minutes:60}") long answerWindowMinutes,
                            @Value("${port.planning.estimate-milestones-hours:72,48,24}") List<Long> milestoneHours,
-                           @Value("${port.planning.draft-due-hours:24}") long draftDueHours) {
+                           @Value("${port.planning.draft-due-hours:24}") long draftDueHours,
+                           @Value("${port.planning.berth-turnaround-minutes:60}") long turnaroundMinutes) {
         this.answerWindow = Duration.ofMinutes(answerWindowMinutes);
+        this.turnaround = Duration.ofMinutes(turnaroundMinutes);
         this.draftDue = Duration.ofHours(draftDueHours);
         this.estimateMilestones = milestoneHours.stream().map(Duration::ofHours).toList();
         this.maintenanceRepository = maintenanceRepository;
@@ -173,11 +177,26 @@ public class PortViewService {
         // the ledger knows when the terminal issued the request that now stands, and when the vessel last estimated
         Map<Long, Instant> requestedAt = latestRecorded(visits, TimeClassifier.REQUESTED);
         Map<Long, Instant> estimatedAt = latestRecorded(visits, TimeClassifier.ESTIMATED);
+        // a booked vessel's berth line, to tell whether it may come alongside now
+        Map<Long, List<BerthAllocation>> byBerth = allocations.values().stream()
+                .anyMatch(a -> a.getStatus() == AllocationStatus.PLANNED)
+                ? allocationRepository.findByStatusIn(AllocationStatus.OPEN).stream()
+                        .collect(Collectors.groupingBy(a -> a.getBerth().getId()))
+                : Map.of();
         Instant now = Instant.now();
         return visits.stream()
                 .map(v -> toView(v, queue.indexOf(v.getId()), allocations.get(v.getId()), latest.get(v.getId()),
-                        requestedAt.get(v.getId()), estimatedAt.get(v.getId()), now))
+                        requestedAt.get(v.getId()), estimatedAt.get(v.getId()), byBerth, now))
                 .toList();
+    }
+
+    /** The vessel whose turn on the berth comes before this booking's, while an arrival now would be refused. */
+    private Ahead aheadOf(BerthAllocation booking, Map<Long, List<BerthAllocation>> byBerth, Instant now) {
+        return BerthTurn.ahead(booking, byBerth.getOrDefault(booking.getBerth().getId(), List.of()), now,
+                        BerthService.stay(booking.getVisit()), turnaround)
+                .map(other -> new Ahead(other.getVisit().getVessel().getCode(), other.getVisit().getVessel().getName(),
+                        other.getStatus(), other.getPlannedStart()))
+                .orElse(null);
     }
 
     private Map<Long, Instant> latestRecorded(List<VesselVisit> visits, TimeClassifier classifier) {
@@ -186,7 +205,8 @@ public class PortViewService {
     }
 
     private VisitView toView(VesselVisit visit, int queueIndex, BerthAllocation allocation,
-                             EtaPrediction report, Instant requestedAt, Instant estimatedAt, Instant now) {
+                             EtaPrediction report, Instant requestedAt, Instant estimatedAt,
+                             Map<Long, List<BerthAllocation>> byBerth, Instant now) {
         Vessel vessel = visit.getVessel();
         Terminal terminal = visit.getTerminal();
         boolean open = !VisitPhase.CLOSED.contains(visit.getPhase());
@@ -227,7 +247,8 @@ public class PortViewService {
                 booked && agreed != null && agreed.isBefore(now) ? agreed : null,
                 visit.getArrivalDraftMeters(),
                 alongside && allocation.getPlannedEnd().isBefore(now) ? allocation.getPlannedEnd() : null,
-                underWay ? PlanningRules.draftDueSince(arrival, visit.getArrivalDraftMeters(), now, draftDue) : null);
+                underWay ? PlanningRules.draftDueSince(arrival, visit.getArrivalDraftMeters(), now, draftDue) : null,
+                booked ? aheadOf(allocation, byBerth, now) : null);
     }
 
     private static Instant firstOf(Instant... times) {

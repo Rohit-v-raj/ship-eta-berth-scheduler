@@ -52,8 +52,18 @@ public record VisitView(
         /** For a vessel alongside: its berth's planned end, once that has passed with the vessel still there. */
         Instant overstayingSince,
         /** For a vessel under way: when its arrival draft fell due (24 h before arrival), while none is declared. */
-        Instant draftDueSince
+        Instant draftDueSince,
+        /**
+         * For a vessel booked on a berth: the vessel whose turn there comes
+         * first, while an arrival now would be refused (the vessel alongside,
+         * or a booking ahead that this stay would run into). Null when the
+         * vessel may come alongside.
+         */
+        Ahead aheadOnBerth
 ) {
+
+    /** A vessel ahead on a berth: alongside ({@code ACTIVE}) or booked ({@code PLANNED}) from {@code plannedStart}. */
+    public record Ahead(String vesselCode, String vesselName, AllocationStatus status, Instant plannedStart) {}
 
     /** A vessel's identity and size. A size is null when the terminal has not been told it. */
     public record VesselView(String code, String name, String imoNumber, String mmsi, VesselType type,
