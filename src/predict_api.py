@@ -4,7 +4,8 @@ Phase 2 of ROADMAP. The Spring Boot layer calls this over HTTP.
 
 The service takes a ship's current AIS state plus its known destination berth,
 derives the SAME features the model was trained on (distance + bearing to the
-destination, and the physics prior), and returns the predicted ETA. The geometry
+destination, the physics prior and the on-course angle), and returns the
+predicted ETA: the minutes until the ship stops at its berth. The geometry
 helpers are imported from ``feature_engineer`` so the API and training can never
 drift apart.
 
@@ -15,6 +16,7 @@ Then POST to http://localhost:8000/predict — see /docs for the interactive UI.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import joblib
@@ -53,7 +55,11 @@ class ShipState(BaseModel):
 
 
 def build_features(s: ShipState) -> dict[str, float]:
-    """Derive model features from raw AIS state — must match training exactly."""
+    """Derive model features from raw AIS state — must match training exactly.
+
+    Every feature any saved model has used is built; the model's own list picks
+    the ones it was trained on (lat/lon only for models before 2026-11-25).
+    """
     dist = float(fe.haversine_nm(s.lat, s.lon, s.dest_lat, s.dest_lon))
     bearing = float(fe.bearing_deg(s.lat, s.lon, s.dest_lat, s.dest_lon))
     naive_eta = min(dist / max(s.sog, 0.5) * 60, 6000)  # physics prior, clipped
@@ -65,6 +71,7 @@ def build_features(s: ShipState) -> dict[str, float]:
         "lat": s.lat,
         "lon": s.lon,
         "naive_eta_min": naive_eta,
+        "oncourse": math.cos(math.radians(s.cog - bearing)),  # 1 when heading straight for the berth
     }
 
 

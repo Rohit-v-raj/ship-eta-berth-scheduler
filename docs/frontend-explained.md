@@ -263,9 +263,10 @@ says so and the rest of the page works.
   only when an estimate carries one, so nothing moves between estimates, and
   the map's ship marks point at the port because the standard's message has no
   course in it.
-- **The model's ETA reads late near port.** The console shows it as the
-  scheduler gives it, next to distance over speed. See the README's known
-  limits.
+- **The model's ETA is sailing time.** It is the time until the ship stops at
+  its berth if it sails on; a ship that will still anchor or wait arrives later.
+  The console shows it as the scheduler gives it, next to distance over speed.
+  See the README's known limits.
 - **The speed is a straight-line sum.** It is the distance to the berth as the
   crow flies over the time available. A real passage is longer, so the figure
   is a starting point, not a passage plan.

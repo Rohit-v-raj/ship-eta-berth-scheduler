@@ -12,7 +12,7 @@
 
 `predict_api.py` is a small web server that **loads our trained XGBoost ETA model
 once, then answers HTTP requests**: you send it a ship's current position, speed,
-heading, and destination; it sends back "this ship will arrive in ~414 minutes."
+heading, and destination; it sends back "this ship will be at its berth in ~547 minutes."
 
 It is **Phase 2** of the roadmap — the bridge between the machine-learning work
 (Phase 1) and the Spring Boot business logic (Phase 3).
@@ -106,11 +106,11 @@ This is the most important thing to understand — what goes **in** and what com
 
 ```json
 {
-  "eta_minutes": 414.0,
-  "eta_hours": 6.9,
-  "distance_to_dest_nm": 21.44,
-  "bearing_to_dest_deg": 35.5,
-  "naive_eta_min": 102.9
+  "eta_minutes": 546.9,
+  "eta_hours": 9.12,
+  "distance_to_dest_nm": 90.88,
+  "bearing_to_dest_deg": 222.4,
+  "naive_eta_min": 419.4
 }
 ```
 
@@ -187,6 +187,7 @@ def build_features(s: ShipState) -> dict[str, float]:
         "lat": s.lat,
         "lon": s.lon,
         "naive_eta_min": naive_eta,
+        "oncourse": math.cos(math.radians(s.cog - bearing)),  # 1 when heading straight for the berth
     }
 ```
 
@@ -200,6 +201,13 @@ computed:
 - `naive_eta_min` — a **physics prior**: distance ÷ speed × 60 = "if the ship just
   held its current speed, how many minutes to arrive?" This gives the model a strong
   starting hint; it learns the *correction* on top of it.
+- `oncourse` — cos(course − bearing): 1 when the ship heads straight for the
+  berth, lower as it points away.
+
+The dictionary also carries `lat` and `lon`. The current model does not use them
+(since November 2026; they made it memorise places), but a model saved before
+then does, and `FEATURES`, read from the saved bundle, picks the ones the loaded
+model was trained on.
 
 The clever, important detail: **we import those geometry functions from
 `feature_engineer`**:

@@ -205,6 +205,24 @@ should especially improve the long-range predictions where history matters most.
 
 ---
 
+## 11. Later: fixing the label (November 2026)
+
+The error-by-horizon table above hid a fault: close to port the model was
+**late**. The label was the time until the crew set the status to "moored",
+which is often well after the ship has stopped (13 minutes on the median, hours
+now and then). So I rebuilt the label as the moment the ship **stops at its
+berth**, read from its speed reports, and re-tested every choice one at a time
+by 5-fold cross-validation by vessel, every model marked against that same
+truth. Three changes earned their place: the new label, leaving out pings
+before a long stop part-way (their time includes a wait), and an absolute-error
+objective. Latitude and longitude went: they memorised places. On the new
+truth the model is off by 36 minutes on unseen vessels (7 in the last half
+hour), where the original was off by 76. Joining voyages across midnight, a log
+target and a random forest were tried and rejected. The details are in
+`xgboost-explained.md`, section 11.
+
+---
+
 ### The 30-second version (if I had to summarize my approach)
 
 > I framed the real goal as ETA (time), not trajectory (position). I built a
