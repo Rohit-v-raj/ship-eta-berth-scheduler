@@ -107,7 +107,7 @@ npm install
 ```
 
 **Confirm it worked:** `node --version` prints a version, and `npm test` in
-`port-console/` reports 87 tests passing (they need neither service running).
+`port-console/` reports 91 tests passing (they need neither service running).
 
 ---
 
@@ -179,7 +179,7 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-153 tests in thirteen classes: migrations and schema, the scheduling flow,
+157 tests in thirteen classes: migrations and schema, the scheduling flow,
 several ships per berth, the planning rules, the console's read views, DCSA
 publishing and receiving, the JSON contract of each controller, the turnaround
 between ships, and the time limits on the model service. The ones that touch the database need
@@ -190,7 +190,7 @@ wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 **Console, from `port-console/`:**
 
 ```powershell
-npm test        # 87 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
+npm test        # 91 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
 npm run lint
 ```
 They run against a mock of the scheduler, so nothing else has to be running.
@@ -349,6 +349,10 @@ curl -s http://127.0.0.1:8080/api/visits                            # -> []
 - A ship comes alongside at its turn. An arrival ahead of a ship booked before
   it on the berth is refused, unless the early ship's stay ends before that
   booking; `GET /api/visits` names the ship it waits for (`aheadOnBerth`).
+- A ship that is early reports arrival at the anchorage (DCSA `ANCHORAGE`
+  `STRT`). It is then taken to be ready an hour later and brought in as soon
+  as that delays no one: behind the ships booked before it, or on a berth
+  more than 4 hours sooner. It is asked for the new time and accepts again.
 - A berth is held from the terminal's answer, whether or not the ship accepts.
   `GET /api/visits` shows `answerDueAt`, 60 minutes after the request; the
   console flags a visit past it. Nothing is cancelled automatically: the

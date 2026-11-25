@@ -20,6 +20,8 @@ const SOURCE_LABEL = {
 
 const MILESTONE_LABEL = {
   ARRIVAL_PILOT_STATION: 'arrival at the pilot station',
+  ANCHORAGE_START: 'arrival at the anchorage',
+  ANCHORAGE_COMPLETE: 'departure from the anchorage',
   ARRIVAL_BERTH: 'arrival at berth',
   CARGO_OPS_START: 'start of cargo operations',
   CARGO_OPS_COMPLETE: 'end of cargo operations',
@@ -58,7 +60,7 @@ function VisitBody({ detail, onClose }) {
       </div>
       <p className="-mt-3 text-[13px] text-ink-2">
         {sizeText(visit) ?? 'Size unknown: this call opened before sizes were required, so its fit was not checked.'}
-        {visit.vessel.loaMeters != null && visit.arrivalDraftMeters == null && visit.ataBerth == null && visit.phase === 'INBOUND'
+        {visit.vessel.loaMeters != null && visit.arrivalDraftMeters == null && visit.ataBerth == null && visit.atdBerth == null && visit.phase !== 'CANCELLED'
           ? ' No draft for this call yet: the largest the ship has declared is used meanwhile.'
           : ''}
       </p>

@@ -95,6 +95,22 @@ export const actualArrival = (vesselCode, time) => berthEvent(vesselCode, 'ARRI'
 
 export const actualDeparture = (vesselCode, time) => berthEvent(vesselCode, 'DEPA', 'ACT', time)
 
+/**
+ * The ship has anchored to wait for its berth: the standard's anchorage
+ * service, started, at an actual time. The terminal may then bring it in
+ * sooner than its estimate, never ahead of a ship booked before it.
+ */
+export const anchorageArrival = (vesselCode, time) => ({
+  ...identity(),
+  vessel: vesselOf(vesselCode),
+  portCallService: {
+    portCallServiceTypeCode: 'ANCHORAGE',
+    portCallServiceEventTypeCode: 'STRT',
+    facilityTypeCode: 'ANCH',
+  },
+  timestamp: { classifierCode: 'ACT', serviceDateTime: iso(time) },
+})
+
 /** The ship will not call after all. */
 export const omittedCall = (vesselCode, unLocode) => ({
   ...identity(),

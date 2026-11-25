@@ -74,6 +74,12 @@ public class VesselVisit extends BaseEntity {
 
     private Instant atdBerth;
 
+    /** When the vessel reported it had anchored to wait for its berth; null if it has not. */
+    private Instant ataAnchorage;
+
+    /** When the vessel reported it had left the anchorage; null while it lies there, or if it never anchored. */
+    private Instant atdAnchorage;
+
     @Column(name = "arrival_draft_m", precision = 5, scale = 2)
     private BigDecimal arrivalDraftMeters;
 
@@ -104,6 +110,11 @@ public class VesselVisit extends BaseEntity {
         this.visitRef = visitRef;
         this.vessel = vessel;
         this.phase = phase;
+    }
+
+    /** Whether the vessel lies at the anchorage now: it anchored, has not left, and is not alongside. */
+    public boolean atAnchorage() {
+        return ataAnchorage != null && atdAnchorage == null && ataBerth == null;
     }
 
     /** The vessel has left the berth: the call is over. */

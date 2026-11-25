@@ -10,6 +10,9 @@ import lombok.Getter;
 @Getter
 public enum Milestone {
     ARRIVAL_PILOT_STATION("PILOT_BOARDING_PLACE", "ARRI", "INBD", "PBPL"),
+    /** The vessel anchors to wait for its berth. The standard gives the anchorage no port call phase. */
+    ANCHORAGE_START("ANCHORAGE", "STRT", null, "ANCH"),
+    ANCHORAGE_COMPLETE("ANCHORAGE", "CMPL", null, "ANCH"),
     ARRIVAL_BERTH("BERTH", "ARRI", "INBD", "BRTH"),
     CARGO_OPS_START("CARGO_OPERATIONS", "STRT", "ALGS", "BRTH"),
     CARGO_OPS_COMPLETE("CARGO_OPERATIONS", "CMPL", "ALGS", "BRTH"),

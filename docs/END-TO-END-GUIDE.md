@@ -74,6 +74,7 @@ DCSA's weekly berth planning process, in the order this guide exercises it:
    no   ─ EST  (another time)      ───────▶   replans, answers with a new REQ
    drop ─ omitted port call        ───────▶   call cancelled, berth passes on
    (no answer)                     ◀───────   the planner may cancel the berth service
+ ACT  anchorage (if early)         ───────▶   in port: brought in as soon as it delays no one
  ACT  arrival                      ───────▶   vessel alongside
  ACT  departure                    ───────▶   berth free, the vessels booked after it move up
 ```
@@ -108,7 +109,8 @@ project's own choices, set in `application.properties`.
 | `Event` with `portCall`, `terminalCall`, `portCallService`, `vessel`, `timestamp` | Same names and nesting. `eventID`s are stable UUIDs |
 | `eventID`, `eventUpdatedDateTime` on an incoming event | Read. An event already applied is not applied again (`INFO`); an estimate or omitted call sent before the vessel's latest event is not applied (`WARN`); a time more than 5 minutes ahead is refused (step 20) |
 | `timestamp.classifierCode` `EST` / `REQ` / `PLN` / `ACT`, `serviceDateTime` | Same. Times are UTC |
-| `portCallServiceTypeCode` `BERTH`, event type `ARRI` / `DEPA`, phase `INBD` / `OUTB`, facility `BRTH` | Same codes. Only the `BERTH` service is acted on; others are answered "not processed" |
+| `portCallServiceTypeCode` `BERTH`, event type `ARRI` / `DEPA`, phase `INBD` / `OUTB`, facility `BRTH` | Same codes. The `BERTH` and `ANCHORAGE` services are acted on; others are answered "not processed" |
+| `portCallServiceTypeCode` `ANCHORAGE`, event type `STRT` / `CMPL`, facility `ANCH`, no phase | Read, actual times only: the ship anchored, or left the anchorage. A ship at anchor may be brought in sooner (step 24). Published the same way |
 | `vessel.vesselIMONumber`, `vesselMMSINumber`, `vesselName`, `vesselTypeCode` | A vessel is matched by IMO number, then MMSI, then name |
 | `vessel.vesselPosition`, `vessel.milesToDestinationPort` (optional) | Read from an `EST`. This is how the terminal learns where a ship is |
 | `vessel.lengthOverall`, `width` in `vesselSizeUnit`; `draft` in `draftUnit` (optional in the standard) | Read from an `EST`, in metres or feet. **Length and beam are required here once per ship**: a call opens only for a ship the terminal knows the size of, and they stay on the vessel record. The draft is per call, due a day before arrival. A ship is given only a berth it fits, and refused if it fits none (step 17) |
@@ -392,7 +394,7 @@ curl -s "$API/api/visits?vessel=NORDVIK"
            "plannedStart":"2026-11-23T10:05:02.980252Z","plannedEnd":"2026-11-24T09:22:02.980252Z","actualStart":null,"actualEnd":null},
   "queueNumber":null,
   "etaBerth":"2026-11-23T10:05:02.980252Z","rtaBerth":"2026-11-23T10:05:02.980252Z","ptaBerth":null,"ataBerth":null,"atdBerth":null,
-  "plannedServiceMinutes":1397,
+  "ataAnchorage":null,"atdAnchorage":null,"plannedServiceMinutes":1397,
   "lastReport":{"reportedAt":"2026-11-23T06:18:09.377456Z","lat":61.62,"lon":4.4,"distanceNm":19.13,"estimatedArrival":"2026-11-23T10:05:02.980252Z"},
   "requestedAt":"2026-11-23T06:18:09.398411Z","answerDueAt":"2026-11-23T07:18:09.398411Z","cancelledBy":null,"remarks":null,
   "estimateDueSince":null,"nextEstimateBy":null,"notArrivedSince":null,"arrivalDraftMeters":null,"overstayingSince":null,
@@ -1433,8 +1435,86 @@ is `null`: ASKVOLL is first in line, and its arrival is recorded.
 Port: an early vessel "can only occupy the berth if it is vacant and it
 doesn't impact on any other window arrangement". Ports that serve ships in
 order of arrival count arrival at the anchorage or the pilot station, not at
-the berth. DCSA has events for both (`PILOT_BOARDING_PLACE`, `ANCHORAGE`),
-which this terminal does not act on yet (section 12).
+the berth. DCSA has events for both (`ANCHORAGE`, `PILOT_BOARDING_PLACE`):
+this terminal takes the anchorage (step 24), not the pilot boarding place
+(section 12).
+
+### Step 24 — An early ship anchors, and is brought in sooner
+
+Carry on from step 23 before DALE arrives: HELLESOY is alongside `B1`, DALE is
+due on `B2` in an hour, and ASKVOLL, agreed for three days from now, is booked
+behind it. (Or reset the port and run step 23's first block again.) ASKVOLL is
+here early. It anchors and says so, with the standard's anchorage service:
+
+```bash
+anchorage() {  # vessel, STRT (anchored) or CMPL (left the anchorage), time
+curl -s -X POST $API/api/port-call/v2/events -H "$J" --data @- <<EOF
+{"events":[{"vessel":{"vesselName":"$1"},
+  "portCallService":{"portCallServiceTypeCode":"ANCHORAGE","portCallServiceEventTypeCode":"$2","facilityTypeCode":"ANCH"},
+  "timestamp":{"classifierCode":"ACT","serviceDateTime":"$3"}}]}
+EOF
+echo; }
+anchorage ASKVOLL STRT $(date -u +%Y-%m-%dT%H:%M:%SZ)
+curl -s "$API/api/visits?vessel=ASKVOLL"
+```
+```json
+{}
+[{... "vessel":{"code":"ASKVOLL", ...},"phase":"ARRIVED", ...
+  "berth":{"berthCode":"B2","berthName":"Berth 2","status":"PLANNED","plannedStart":"2026-11-25T12:35:37Z","plannedEnd":"2026-11-26T11:52:37Z", ...},
+  "etaBerth":"2026-11-27T11:18:36Z","rtaBerth":"2026-11-25T12:35:37Z","ptaBerth":null, ...
+  "ataAnchorage":"2026-11-24T11:18:37Z","atdAnchorage":null, ... "nextEstimateBy":null, ...
+  "aheadOnBerth":{"vesselCode":"DALE","vesselName":"DALE","status":"PLANNED","plannedStart":"2026-11-24T12:18:37Z"}}]
+```
+
+and in its ledger:
+
+```
+ ANCHORAGE_START  ACTUAL     2026-11-24T11:18:37Z  by VESSEL
+ ARRIVAL_BERTH    REQUESTED  2026-11-25T12:35:37Z  by TERMINAL  B2  "At the anchorage since 2026-11-24T11:18:37Z, ready to come in"
+```
+
+**What to notice.**
+
+- ASKVOLL is brought forward by almost two days: from Friday to an hour after
+  DALE is planned to leave (`11:35:37`, then the turnaround). It is here, so
+  its estimate no longer says when it can come. The terminal takes it to be
+  ready an hour after it anchored (`port.planning.anchorage-to-berth-minutes`,
+  60, our own choice: weighing anchor, the pilot, the passage in).
+- DALE keeps its time and is told nothing. A ship at anchor moves up only
+  behind the ships booked before it on its berth, never into a gap that would
+  delay a booking. A berth that could take it more than 4 hours sooner, in
+  such a gap, would take it instead.
+- The new time is a new request: `ptaBerth` is empty again, and ASKVOLL
+  accepts as in step 7. The phase is `ARRIVED`, in port but not alongside. No
+  further estimate is expected of it (`nextEstimateBy` is `null`); its draft
+  is still due.
+- On *My vessel*, *Report arrival at the anchorage* sends this event.
+  Afterwards the page shows "At the anchorage, …", and so does the planner's
+  arrivals table.
+
+The feed publishes it in the standard's terms. The anchorage has no port call
+phase, so none is sent:
+
+```bash
+curl -s "$API/api/port-call/v2/events?portCallServiceTypeCode=ANCHORAGE"
+```
+```json
+{"events":[{... "portCallService":{... "portCallServiceTypeCode":"ANCHORAGE","portCallServiceEventTypeCode":"STRT","facilityTypeCode":"ANCH"},
+  "vessel":{"vesselName":"ASKVOLL", ...},"timestamp":{"classifierCode":"ACT","serviceDateTime":"2026-11-24T11:18:37Z"}}]}
+```
+
+Only actual anchorage times are taken. An estimated one answers `WARN`:
+`Not processed: this terminal records actual anchorage times only`. Anchoring
+again answers `ERROR`: `Vessel ASKVOLL has been at the anchorage since
+2026-11-24T11:18:37Z; it reports leaving it first`. When ASKVOLL weighs anchor,
+`anchorage ASKVOLL CMPL …` records `atdAnchorage`. The plan does not change,
+since the ship was already taken to be ready from the anchorage.
+
+**DCSA and ports:** the anchorage service has the event types `STRT` and
+`CMPL` and the facility `ANCH`. Ports that serve ships in order of arrival
+count arrival at the anchorage and call a ship in when its berth is ready.
+The IMO's just-in-time guide aims to make that wait unnecessary, by timing the
+ship's arrival from the start.
 
 ## 7. What the service refuses, and how
 
@@ -1443,7 +1523,9 @@ Worth running: a system is as clear in its refusals as in its answers.
 | Send | Answer |
 |---|---|
 | `GET /api/port-call/v2/events?carrierServiceCode=FE1` (a filter it does not support) | `400`, `feedbackElements` naming the ten it does |
-| `POST` events for a non-berth service, e.g. `"portCallServiceTypeCode":"PILOTAGE"` | `200`, `WARN`: `Not processed: this terminal acts on BERTH events only` |
+| `POST` events for a service other than the berth and the anchorage, e.g. `"portCallServiceTypeCode":"PILOTAGE"` | `200`, `WARN`: `Not processed: this terminal acts on BERTH and ANCHORAGE events only` |
+| `POST` an anchorage time that is not actual (`EST`, `PLN`) | `200`, `WARN`: `Not processed: this terminal records actual anchorage times only` |
+| `POST` an anchorage arrival for a ship already at anchor or alongside; leaving an anchorage it is not at, or before it arrived there | `200`, `ERROR`, saying which (step 24) |
 | `POST` a `REQ` (the terminal's own kind of time) | `200`, `ERROR`: `A requested time at berth is issued by the terminal, not sent to it` |
 | `POST` an estimated or planned **departure** | `200`, `WARN`: it is addressed to the port authority |
 | `POST` a `PLN`, `ACT` or omit for a ship with no open call | `200`, `ERROR`: `Vessel X has no open visit` |
@@ -1494,7 +1576,7 @@ EOF
 ```
 ```json
 {"feedbackElements":[
-  {"severity":"WARN","message":"Not processed: this terminal acts on BERTH events only","propertyPath":"$.events[0]"},
+  {"severity":"WARN","message":"Not processed: this terminal acts on BERTH and ANCHORAGE events only","propertyPath":"$.events[0]"},
   {"severity":"ERROR","message":"A requested time at berth is issued by the terminal, not sent to it","propertyPath":"$.events[1]"}]}
 ```
 
@@ -1549,6 +1631,7 @@ sent, so you can compare it with this guide.
 | Step 21 | **Harbour**: a ship due more than 7 days ahead is listed as in line with no berth; its visit's ledger says "A berth is given within 7 days of arrival". The *Ships booked* figure counts the others |
 | Step 22 | **Harbour**: a ship past its planned end shows "Overstaying, … past planned end"; in its visit, *Expected to leave at* sets the time, above *Release* |
 | Step 23 | **My vessel**: a ship booked behind another sees "B2 is booked for DALE first, from …" where *Report arrival* would be, until that ship has left |
+| Step 24 | **My vessel**: *Report arrival at the anchorage*; then "At the anchorage, …" and the new requested time to accept. **Harbour** shows the same chip |
 | Steps 8 to 14 and 19, played for you | **Stories**, the bar at the bottom: *The port fills up*, *A quiet port*, *A change of plan*, *A ship goes quiet*, *A ship falls behind* |
 
 ---
@@ -1557,25 +1640,25 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 153 tests in thirteen classes; needs MySQL, not FastAPI
+.\gradlew test          # 157 tests in thirteen classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
 |---|---|
 | `PortCallEventsControllerTest` | The feed's JSON, headers, paging and error format against the standard |
-| `PortCallEventReceiverTest` | Each incoming event: a repeat applied once, one overtaken by a later event not applied, estimate, position, accept, stale accept, arrival, departure, omit |
+| `PortCallEventReceiverTest` | Each incoming event: a repeat applied once, one overtaken by a later event not applied, estimate, position, accept, stale accept, arrival, departure, omit, the anchorage |
 | `PortCallEventPublisherTest` | What is published, the filters, the cursor, and the two flags for a call that did not take place |
 | `VesselOperatorControllerTest` | The calculator's answer, with and without an open call, and that it stores nothing |
 | `ConsoleControllerTest` | The JSON of every read, of release and of cancel, with their `404`, `409` and `400` answers |
 | `PortViewServiceTest`, `BerthSchedulingTest` | The views and the scheduling rules through real MySQL: booked ships' times refreshed, the answer and the estimate that are due, the terminal's cancellation, berth fit, maintenance, a booked ship that falls behind, overstays |
-| `BerthSequenceTest` | Several ships per berth: the gap before a booking, a booking that moves to a berth much sooner, maintenance over a booked ship, an arrival at an occupied berth |
+| `BerthSequenceTest` | Several ships per berth: the gap before a booking, a booking that moves to a berth much sooner, maintenance over a booked ship, an arrival at an occupied berth or before the ship's turn, a ship at anchor brought in sooner |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production |
 | `VesselSizeTest` | Length and beam required once per ship, kept for later calls; the largest draft kept and used; the draft due a day before arrival |
 | `PlanningRulesTest`, `SchemaMigrationTest` | The stay and speed arithmetic; the migrations and the database's own rules |
 
 ```powershell
 cd port-console
-npm test                # 87 tests; nothing else needs to be running
+npm test                # 91 tests; nothing else needs to be running
 npm run lint
 ```
 
@@ -1626,8 +1709,12 @@ DELETE FROM berth_maintenance;
 It follows the standard's messages and codes. It is **not certified** and has
 not been run through DCSA's conformance tests.
 
-- **Only the berth service is acted on.** Pilotage, towage, cargo operations
-  and moves forecasts are answered "not processed".
+- **Only the berth and anchorage services are acted on.** Pilotage, towage,
+  cargo operations, the pilot boarding place and moves forecasts are answered
+  "not processed". Of the anchorage, only actual times are taken.
+- **A ship at anchor is taken to be ready an hour after it anchored**, whatever
+  its estimate said (`port.planning.anchorage-to-berth-minutes`, this
+  service's own setting), and may be brought in sooner (step 24).
 - **A ship's length and beam are required, once per ship**, where the
   standard leaves them optional: a call opens only for a ship the terminal
   knows the size of. A terminal operating system holds these as vessel master
@@ -1637,8 +1724,7 @@ not been run through DCSA's conformance tests.
   (step 23). The standard records an actual arrival as the ship's report of a
   fact; this terminal refuses one at a berth booked for another ship first,
   since a ship berths when the terminal is ready for it. A ship that is early
-  would report arrival at the anchorage or the pilot boarding place, events
-  this terminal does not act on yet.
+  reports arrival at the anchorage instead (step 24).
 - **One record is both the port call and the terminal call.** The standard
   allows several terminal calls within one port call.
 - **No facility codes.** The demo terminal codes are invented, so no SMDG code

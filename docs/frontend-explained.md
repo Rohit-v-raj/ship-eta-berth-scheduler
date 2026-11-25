@@ -91,7 +91,11 @@ button; whether to cancel is left to the planner.
    come, the page names that ship instead ("B2 is booked for DALE first, from
    11:29. Report arrival at your turn, once it has left."). The scheduler
    refuses such an arrival, and its view says whose turn comes first
-   (`aheadOnBerth`).
+   (`aheadOnBerth`). A ship that is here early reports arrival at the
+   anchorage instead (*Report arrival at the anchorage*, a DCSA anchorage
+   event). The terminal may then bring it in sooner, with a new requested
+   time to accept, and the page shows "At the anchorage, …" until it berths;
+   so do the planner's arrivals table and visit drawer.
 
 If the terminal cancels the call, this page says so, with the reason, instead
 of going blank. It also says by when the terminal expects the next estimate.
@@ -241,7 +245,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 87 tests
+npm test             # 91 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

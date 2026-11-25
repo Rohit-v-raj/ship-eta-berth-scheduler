@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { actualArrival, actualDeparture, DCSA_VESSEL_TYPE, estimatedArrival, omittedCall, plannedArrival, sendEvents } from '@/api/dcsa'
+import { actualArrival, actualDeparture, anchorageArrival, DCSA_VESSEL_TYPE, estimatedArrival, omittedCall, plannedArrival, sendEvents } from '@/api/dcsa'
 import { useRefreshPort } from '@/api/queries'
 import { useTime } from '@/app/providers'
 import { Button, Field, InlineError, Input } from '@/components/ui/controls'
 import { ConfirmDialog, Dialog } from '@/components/ui/overlay'
 import { dayClock, fromLocalInput, HOUR, toLocalInput, toMillis } from '@/lib/time'
-import { AGREEMENT, agreementOf, STANDING, standingOf, vesselLabel } from '@/lib/visit'
+import { AGREEMENT, agreementOf, atAnchorage, STANDING, standingOf, vesselLabel } from '@/lib/visit'
 import { useCan } from '@/session/session'
 
 /**
@@ -24,6 +24,10 @@ import { useCan } from '@/session/session'
  * another ship lies at the berth, or one booked ahead of it is still to come
  * and this stay would not be over before it. The scheduler refuses such an
  * arrival; an early ship waits.
+ *
+ * A ship that is here early reports its arrival at the anchorage instead. The
+ * terminal may then bring it in sooner, never ahead of a ship booked before
+ * it, and answers with a new requested arrival for it to accept.
  */
 export function DecisionBar({ visit, port }) {
   const allowed = useCan('visit.answer')
@@ -39,6 +43,7 @@ export function DecisionBar({ visit, port }) {
   const agreement = agreementOf(visit)
   const agreedOnBerth = standing === STANDING.RESERVED && agreement === AGREEMENT.AGREED
   const ahead = visit.aheadOnBerth
+  const anchored = atAnchorage(visit)
 
   const act = async (name, events, label, done) => {
     setBusy(name)
@@ -71,6 +76,16 @@ export function DecisionBar({ visit, port }) {
             <Button size="lg" variant="danger" onClick={() => setDialog('omit')} disabled={busy !== null}>Omit this call</Button>
           </>
         )}
+        {standing !== STANDING.ALONGSIDE && !anchored && (
+          <Button
+            size="lg"
+            onClick={() => act('anchor', [anchorageArrival(code, new Date())], 'Report arrival at the anchorage', 'Arrival at the anchorage recorded')}
+            busy={busy === 'anchor'}
+            disabled={busy !== null}
+          >
+            Report arrival at the anchorage
+          </Button>
+        )}
         {agreedOnBerth && !ahead && (
           <Button size="lg" onClick={() => act('arrive', [actualArrival(code, new Date())], 'Report arrival at berth', `Arrival at ${visit.berth.berthCode} recorded`)} busy={busy === 'arrive'} disabled={busy !== null}>
             Report arrival at {visit.berth.berthCode}
@@ -85,7 +100,12 @@ export function DecisionBar({ visit, port }) {
       {standing === STANDING.RESERVED && agreement === AGREEMENT.AWAITING && (
         <p className="text-sm text-ink-2">Accept the requested arrival, or propose another time, before reporting arrival at {visit.berth.berthCode}.</p>
       )}
-      {agreedOnBerth && ahead && <p className="text-sm text-ink-2">{waitForTurn(ahead, visit.berth.berthCode, zone, now)}</p>}
+      {agreedOnBerth && ahead && (
+        <p className="text-sm text-ink-2">
+          {waitForTurn(ahead, visit.berth.berthCode, zone, now)}
+          {!anchored && ' If you are here early, report arrival at the anchorage.'}
+        </p>
+      )}
       <InlineError>{error}</InlineError>
 
       <ProposeDialog

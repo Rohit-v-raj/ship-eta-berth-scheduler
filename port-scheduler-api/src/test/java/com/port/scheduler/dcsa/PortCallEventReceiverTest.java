@@ -136,6 +136,35 @@ class PortCallEventReceiverTest {
     }
 
     @Test
+    void anAnchorageArrivalBringsTheBerthForwardAndBothAnchorageTimesArePublished() {
+        receiver.receive(List.of(berth("ARRI", "EST", ETA)));   // booked on B1, six hours out
+        Instant anchored = Instant.now().minus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.SECONDS);
+        Instant left = anchored.plus(Duration.ofMinutes(5));
+
+        assertThat(receiver.receive(List.of(anchorage("STRT", "ACT", anchored)))).isEmpty();
+        VesselVisit visit = visits.findAll().get(0);
+        assertThat(visit.getPhase()).isEqualTo(VisitPhase.ARRIVED);
+        assertThat(visit.getAtaAnchorage()).isEqualTo(anchored);
+        // B1 is free, so the ship is asked in one passage (an hour) after it anchored, not at its estimate
+        assertThat(visit.getRtaBerth()).isEqualTo(anchored.plus(Duration.ofHours(1)));
+        assertThat(views.visits(null, false).get(0).ataAnchorage()).isEqualTo(anchored);
+
+        assertThat(receiver.receive(List.of(anchorage("CMPL", "ACT", left)))).isEmpty();
+        assertThat(visit.getAtdAnchorage()).isEqualTo(left);
+
+        assertThat(publisher.find(new Filter(null, null, null, null, "ANCHORAGE", null, null, null, null, null)).events())
+                .extracting(e -> e.portCallService().portCallServiceEventTypeCode(),
+                        e -> e.portCallService().facilityTypeCode(), e -> e.portCallService().portCallPhaseTypeCode(),
+                        e -> e.timestamp().classifierCode(), e -> e.timestamp().serviceDateTime())
+                .containsExactly(tuple("STRT", "ANCH", null, "ACT", anchored), tuple("CMPL", "ANCH", null, "ACT", left));
+
+        assertThat(receiver.receive(List.of(anchorage("STRT", "EST", ETA), anchorage("CMPL", "ACT", left))))
+                .extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
+                        tuple("WARN", "Not processed: this terminal records actual anchorage times only"),
+                        tuple("ERROR", "Vessel IMO9321483 is not at the anchorage"));
+    }
+
+    @Test
     void anEventForAnotherPortIsRefusedAndOneForThisPortOrNoneIsTakenAsMeantHere() {
         Event calledElsewhere = new Event(null, null, null, new PortCall(null, null, "NLRTM", null), null,
                 new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), SHIP,
@@ -435,6 +464,12 @@ class PortCallEventReceiverTest {
 
     private static Event omit(UUID id, Instant sent) {
         return new Event(id, null, sent, new PortCall(null, null, "NOFRO", true), null, null, SHIP, null);
+    }
+
+    private static Event anchorage(String eventType, String classifier, Instant time) {
+        return new Event(null, null, null, null, null,
+                new PortCallService(null, "ANCHORAGE", eventType, null, "ANCH", null, null), SHIP,
+                new Timestamp(classifier, time, null));
     }
 
     private static Event berth(String eventType, String classifier, Instant time) {

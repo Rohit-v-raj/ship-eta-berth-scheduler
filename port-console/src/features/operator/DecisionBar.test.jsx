@@ -58,7 +58,7 @@ describe('DecisionBar', () => {
     renderWithApp(<DecisionBar visit={notAccepted} port={port} />, asOperator)
 
     expect(screen.getByRole('button', { name: 'Accept requested arrival' })).toBeEnabled()
-    expect(screen.queryByRole('button', { name: /Report arrival/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Report arrival at B/ })).not.toBeInTheDocument()
     expect(screen.getByText(/before reporting arrival at B1/)).toBeInTheDocument()
   })
 
@@ -67,14 +67,39 @@ describe('DecisionBar', () => {
     const behindBooking = { ...reserved, aheadOnBerth: { vesselCode: 'KVITSOY', vesselName: null, status: 'PLANNED', plannedStart } }
     const { unmount } = renderWithApp(<DecisionBar visit={behindBooking} port={port} />, asOperator)
 
-    expect(screen.queryByRole('button', { name: /Report arrival/ })).not.toBeInTheDocument()
-    expect(screen.getByText(/^B1 is booked for KVITSOY first, from .+\. Report arrival at your turn, once it has left\.$/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Report arrival at B/ })).not.toBeInTheDocument()
+    expect(screen.getByText(/^B1 is booked for KVITSOY first, from .+\. Report arrival at your turn, once it has left\./)).toBeInTheDocument()
     unmount()
 
     const behindAlongside = { ...reserved, aheadOnBerth: { vesselCode: 'KVITSOY', vesselName: 'Kvitsoy', status: 'ACTIVE', plannedStart } }
     renderWithApp(<DecisionBar visit={behindAlongside} port={port} />, asOperator)
-    expect(screen.queryByRole('button', { name: /Report arrival/ })).not.toBeInTheDocument()
-    expect(screen.getByText('Kvitsoy is still alongside B1. Report arrival once it has left.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Report arrival at B/ })).not.toBeInTheDocument()
+    expect(screen.getByText(/^Kvitsoy is still alongside B1\. Report arrival once it has left\./)).toBeInTheDocument()
+  })
+
+  it('lets a ship that is early report arrival at the anchorage instead', async () => {
+    const sent = captureEvents()
+    const plannedStart = new Date(Date.now() + 3_600_000).toISOString()
+    const early = { ...reserved, aheadOnBerth: { vesselCode: 'KVITSOY', vesselName: null, status: 'PLANNED', plannedStart } }
+    renderWithApp(<DecisionBar visit={early} port={port} />, asOperator)
+
+    expect(screen.getByText(/once it has left\. If you are here early, report arrival at the anchorage\.$/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Report arrival at the anchorage' }))
+
+    const [event] = sent[0].events
+    expect(event.portCallService).toEqual({ portCallServiceTypeCode: 'ANCHORAGE', portCallServiceEventTypeCode: 'STRT', facilityTypeCode: 'ANCH' })
+    expect(event.timestamp.classifierCode).toBe('ACT')
+  })
+
+  it('does not offer the anchorage to a ship already lying there, nor to one alongside', () => {
+    const anchored = { ...reserved, ataAnchorage: new Date().toISOString(), aheadOnBerth: { vesselCode: 'KVITSOY', vesselName: null, status: 'PLANNED', plannedStart: new Date().toISOString() } }
+    const { unmount } = renderWithApp(<DecisionBar visit={anchored} port={port} />, asOperator)
+    expect(screen.queryByRole('button', { name: 'Report arrival at the anchorage' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/If you are here early/)).not.toBeInTheDocument()
+    unmount()
+
+    renderWithApp(<DecisionBar visit={alongside} port={port} />, asOperator)
+    expect(screen.queryByRole('button', { name: 'Report arrival at the anchorage' })).not.toBeInTheDocument()
   })
 
   it('asks before omitting, then sends an omitted port call', async () => {

@@ -18,6 +18,7 @@ const SERVICES = [
   { code: 'BERTH', label: 'Berth' },
   { code: 'CARGO_OPERATIONS', label: 'Cargo operations' },
   { code: 'PILOT_BOARDING_PLACE', label: 'Pilot boarding place' },
+  { code: 'ANCHORAGE', label: 'Anchorage' },
 ]
 
 const EVENT_TYPE = { ARRI: 'arrival', DEPA: 'departure', STRT: 'start', CMPL: 'completion' }
