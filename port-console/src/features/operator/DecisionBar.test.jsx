@@ -1,7 +1,8 @@
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { toast } from 'sonner'
+import { describe, expect, it, vi } from 'vitest'
 import { makeVisits, port } from '@/test/fixtures'
 import { server } from '@/test/msw/server'
 import { renderWithApp } from '@/test/render'
@@ -45,6 +46,18 @@ describe('DecisionBar', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Accept requested arrival' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/requested arrival is now .* The terminal changed its request/)
+  })
+
+  it('shows a warning the terminal gave with an event it applied', async () => {
+    const warn = vi.spyOn(toast, 'warning').mockImplementation(() => {})
+    const message = 'Applied, but the estimated arrival 2026-10-13T08:00:00Z has already passed: the ship is planned from now'
+    captureEvents([{ severity: 'WARN', message, propertyPath: '$.events[0]' }])
+    renderWithApp(<DecisionBar visit={waiting} port={port} />, asOperator)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept requested arrival' }))
+
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(message))
+    warn.mockRestore()
   })
 
   it('does not offer to accept a time that is already agreed', () => {

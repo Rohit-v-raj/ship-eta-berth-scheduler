@@ -165,6 +165,21 @@ class PortCallEventReceiverTest {
     }
 
     @Test
+    void anEstimatedArrivalAlreadyPastIsAppliedWithAWarning() {
+        Instant past = Instant.now().minus(Duration.ofHours(2)).truncatedTo(ChronoUnit.SECONDS);
+
+        List<FeedbackElement> feedback = receiver.receive(List.of(berth("ARRI", "EST", past)));
+
+        assertThat(feedback).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
+                tuple("WARN", "Applied, but the estimated arrival " + past + " has already passed: the ship is planned from now"));
+        VesselVisit visit = visits.findAll().get(0);
+        assertThat(visit.getEtaBerth()).isEqualTo(past);
+        assertThat(visit.getRtaBerth()).isAfter(past);   // the berth is free now, so the request is now
+        // an estimate within the clock leeway is no surprise
+        assertThat(receiver.receive(List.of(berth("ARRI", "EST", Instant.now().minus(Duration.ofMinutes(2)))))).isEmpty();
+    }
+
+    @Test
     void anEventForAnotherPortIsRefusedAndOneForThisPortOrNoneIsTakenAsMeantHere() {
         Event calledElsewhere = new Event(null, null, null, new PortCall(null, null, "NLRTM", null), null,
                 new PortCallService(null, "BERTH", "ARRI", null, "BRTH", null, null), SHIP,
@@ -194,6 +209,7 @@ class PortCallEventReceiverTest {
         List<FeedbackElement> feedback = receiver.receive(List.of(
                 estimateFor(named("12345678901", null, "Long Number")),
                 estimateFor(named("ABC1234", null, "Letters")),
+                estimateFor(named("9321484", null, "Wrong Check Digit")),
                 estimateFor(named(null, "12345", "Short MMSI")),
                 estimateFor(named(null, null, "A".repeat(40))),
                 berth("ARRI", "REQ", ETA)));
@@ -201,6 +217,7 @@ class PortCallEventReceiverTest {
         assertThat(feedback).extracting(FeedbackElement::message).containsExactly(
                 "vesselIMONumber must be 7 digits",
                 "vesselIMONumber must be 7 digits",
+                "vesselIMONumber 9321484 fails its check digit: the last digit should be 3",
                 "vesselMMSINumber must be 9 digits",
                 "vesselName can be at most 32 characters when no vesselIMONumber or vesselMMSINumber is given",
                 "A requested time at berth is issued by the terminal, not sent to it");

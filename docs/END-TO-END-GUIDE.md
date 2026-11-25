@@ -111,12 +111,12 @@ project's own choices, set in `application.properties`.
 | `timestamp.classifierCode` `EST` / `REQ` / `PLN` / `ACT`, `serviceDateTime` | Same. Times are UTC |
 | `portCallServiceTypeCode` `BERTH`, event type `ARRI` / `DEPA`, phase `INBD` / `OUTB`, facility `BRTH` | Same codes. The `BERTH` and `ANCHORAGE` services are acted on; others are answered "not processed" |
 | `portCallServiceTypeCode` `ANCHORAGE`, event type `STRT` / `CMPL`, facility `ANCH`, no phase | Read, actual times only: the ship anchored, or left the anchorage. A ship at anchor may be brought in sooner (step 24). Published the same way |
-| `vessel.vesselIMONumber`, `vesselMMSINumber`, `vesselName`, `vesselTypeCode` | A vessel is matched by IMO number, then MMSI, then name |
+| `vessel.vesselIMONumber`, `vesselMMSINumber`, `vesselName`, `vesselTypeCode` | A vessel is matched by IMO number, then MMSI, then name. An IMO number must pass its check digit |
 | `vessel.vesselPosition`, `vessel.milesToDestinationPort` (optional) | Read from an `EST`. This is how the terminal learns where a ship is |
 | `vessel.lengthOverall`, `width` in `vesselSizeUnit`; `draft` in `draftUnit` (optional in the standard) | Read from an `EST`, in metres or feet. **Length and beam are required here once per ship**: a call opens only for a ship the terminal knows the size of, and they stay on the vessel record. The draft is per call, due a day before arrival. A ship is given only a berth it fits, and refused if it fits none (step 17) |
 | `portCall.isOmitted` / `terminalCall.isOmitted` ("omitted by the carrier") | Read: it cancels the call. Published on every event of such a call |
 | `portCallService.isCanceled` ("canceled by the service provider") | Published on every event of a call the terminal cancelled (step 13). Not read: here the terminal is the provider |
-| `feedbackElements` with `severity`, `message`, `propertyPath` | Same. A refused event is reported by its position, `$.events[0]` |
+| `feedbackElements` with `severity`, `message`, `propertyPath` | Same. A refused event is reported by its position, `$.events[0]`; a field that cannot be read, by its path, `$.events[1].timestamp.serviceDateTime` |
 | `200` even when some events could not be applied | Same |
 | `API-Version` header on every response | Sent, value `2.0.0` |
 | Paging by `limit`, `cursor` and the `Next-Page-Cursor` header | Same |
@@ -1152,6 +1152,10 @@ EOF
 echo; done
 ```
 
+The estimate is applied with a warning, since its time has passed:
+`WARN` `Applied, but the estimated arrival … has already passed: the ship is
+planned from now`. The arrival answers `{}`.
+
 Then, each sent the same way:
 
 | SVANOY sends | Answer (`ERROR` in `feedbackElements`) |
@@ -1534,6 +1538,8 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `POST` a `PLN`, `ACT` or omit for a ship with no open call | `200`, `ERROR`: `Vessel X has no open visit` |
 | `POST` a position that cannot be read, e.g. `"latitude":"north"` | `200`, `ERROR` for that event |
 | `POST` `{"events":[]}` or a body that is not JSON | `400`, `feedbackElements` |
+| `POST` an event that cannot be read, such as a time with no UTC offset or a word where a number belongs | `200`, `ERROR` for that event only, at the field: `timestamp.serviceDateTime: '2026-10-12T14:00:00' is not a date-time with a UTC offset; send ISO 8601, for example 2026-11-25T10:00:00Z`, path `$.events[1].timestamp.serviceDateTime`. The other events are applied |
+| `POST` an estimated arrival more than 5 minutes in the past | `200`, `WARN`: `Applied, but the estimated arrival … has already passed: the ship is planned from now`. The estimate is applied |
 | `GET /api/visits/VV-NOT-THERE` | `404`, `{"statusCode":404,"message":"Visit not found: ..."}` |
 | `GET /api/visits?state=closed` (only `open` and `all` exist) | `400`, `state must be 'open' or 'all'` |
 | `PUT /api/visits/{visitRef}/cancel` for a ship alongside, or a visit already over | `409`, saying which |
@@ -1556,7 +1562,7 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `POST /api/operator/eta` while the model service is down or does not answer | `503`, `The ETA model service is not answering; try again shortly`, at once if it is down and after 10 seconds if it is hung |
 | `POST` an omitted call, an estimate, or a departure the call's state does not allow | `200`, `ERROR`, saying why (step 20) |
 | `POST` an event naming another port | `200`, `ERROR`: `This terminal is at NOFRO; the event is for …` |
-| `POST` an IMO number that is not 7 digits, an MMSI that is not 9, or a name over 32 characters with neither | `200`, `ERROR` naming the field. No vessel record is created |
+| `POST` an IMO number that is not 7 digits or fails its check digit, an MMSI that is not 9, or a name over 32 characters with neither | `200`, `ERROR` naming the field, for example `vesselIMONumber 9321484 fails its check digit: the last digit should be 3`. No vessel record is created |
 | `POST` an event whose `eventID` was already applied | `200`, `INFO`: `Already received at …`. Not applied again |
 | `POST` an estimate or omitted call sent before the latest event already applied for its vessel | `200`, `WARN`: `Not applied: this event was sent at …, before the latest event from this vessel, …` |
 | `POST` an `eventUpdatedDateTime` more than 5 minutes ahead of the clock | `200`, `ERROR`: `eventUpdatedDateTime cannot be in the future: …` |
@@ -1643,7 +1649,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 157 tests in thirteen classes; needs MySQL, not FastAPI
+.\gradlew test          # 159 tests in thirteen classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
@@ -1661,7 +1667,7 @@ cd port-scheduler-api
 
 ```powershell
 cd port-console
-npm test                # 91 tests; nothing else needs to be running
+npm test                # 92 tests; nothing else needs to be running
 npm run lint
 ```
 

@@ -1,13 +1,19 @@
 package com.port.scheduler.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
+import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.port.scheduler.dcsa.PortCallEventPublisher;
 import com.port.scheduler.dcsa.PortCallEventReceiver;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Filter;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Page;
+import com.port.scheduler.dcsa.PortCallMessages.Event;
 import com.port.scheduler.dcsa.PortCallMessages.FeedbackElement;
 import com.port.scheduler.dcsa.PortCallMessages.GetEventsError;
 import com.port.scheduler.dcsa.PortCallMessages.GetEventsResponse;
-import com.port.scheduler.dcsa.PortCallMessages.PostEventsRequest;
 import com.port.scheduler.dcsa.PortCallMessages.PostEventsResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -23,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -51,26 +58,86 @@ public class PortCallEventsController {
 
     private final PortCallEventPublisher publisher;
     private final PortCallEventReceiver receiver;
+    private final ObjectMapper json;
 
-    public PortCallEventsController(PortCallEventPublisher publisher, PortCallEventReceiver receiver) {
+    public PortCallEventsController(PortCallEventPublisher publisher, PortCallEventReceiver receiver, ObjectMapper json) {
         this.publisher = publisher;
         this.receiver = receiver;
+        this.json = json;
     }
 
     /**
      * The event subscriber endpoint: a vessel operator sends events here. The
      * answer is 200 even when some events could not be applied; each of those
      * is reported in {@code feedbackElements} with its position in the request.
+     *
+     * Each event is read on its own, so one that cannot be read (a time with no
+     * UTC offset, a word where a number belongs) is refused by itself, naming the
+     * field, and the others are still applied. Only a body that is not JSON, or
+     * has no events, is refused as a whole.
      */
     @PostMapping("/events")
-    public ResponseEntity<PostEventsResponse> receive(@RequestBody PostEventsRequest request) {
-        if (request.events() == null || request.events().isEmpty()) {
+    public ResponseEntity<PostEventsResponse> receive(@RequestBody JsonNode body) {
+        JsonNode events = body == null ? null : body.get("events");
+        if (events == null || !events.isArray() || events.isEmpty()) {
             throw new IllegalArgumentException("The request must contain at least one event");
         }
-        List<FeedbackElement> feedback = receiver.receive(request.events());
+        List<FeedbackElement> feedback = new ArrayList<>();
+        for (int i = 0; i < events.size(); i++) {
+            String path = "$.events[" + i + "]";
+            Event event;
+            try {
+                event = json.treeToValue(events.get(i), Event.class);
+            } catch (JsonProcessingException e) {
+                feedback.add(unreadable(e, path));
+                continue;
+            }
+            receiver.receive(event, path).ifPresent(feedback::add);
+        }
         return ResponseEntity.ok()
                 .header("API-Version", API_VERSION)
                 .body(new PostEventsResponse(feedback.isEmpty() ? null : feedback));
+    }
+
+    /** An event that could not be read, refused by itself with the field that stopped it. */
+    static FeedbackElement unreadable(JsonProcessingException e, String path) {
+        StringBuilder field = new StringBuilder();
+        if (e instanceof JsonMappingException mapping) {
+            for (JsonMappingException.Reference ref : mapping.getPath()) {
+                field.append(ref.getFieldName() != null ? "." + ref.getFieldName() : "[" + ref.getIndex() + "]");
+            }
+        }
+        String name = field.length() > 0 ? field.substring(1) : "the event";
+        Object value = e instanceof InvalidFormatException format ? format.getValue() : null;
+        String shown = value == null ? "" : " '" + abbreviate(String.valueOf(value)) + "'";
+        Class<?> target = e instanceof MismatchedInputException mismatch ? mismatch.getTargetType() : null;
+        String message;
+        if (target == Instant.class) {
+            message = name + ":" + shown + " is not a date-time with a UTC offset; send ISO 8601, for example "
+                    + "2026-11-25T10:00:00Z";
+        } else if (target != null) {
+            message = name + ":" + shown + " could not be read as " + describe(target);
+        } else {
+            message = name + " could not be read";
+        }
+        return new FeedbackElement("ERROR", message, path + field);
+    }
+
+    private static String describe(Class<?> type) {
+        if (Number.class.isAssignableFrom(type) || type.isPrimitive() && type != boolean.class) {
+            return "a number";
+        }
+        if (type == Boolean.class || type == boolean.class) {
+            return "true or false";
+        }
+        if (type == java.util.UUID.class) {
+            return "a UUID";
+        }
+        return type == String.class ? "text" : "an object of the expected shape";
+    }
+
+    private static String abbreviate(String value) {
+        return value.length() <= 40 ? value : value.substring(0, 40) + "…";
     }
 
     @GetMapping("/events")
