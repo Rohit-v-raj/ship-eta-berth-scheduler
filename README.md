@@ -352,8 +352,8 @@ sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
 `curl` command, with the answer to expect and how each step lines up with the
 standard.
 
-Java tests (157, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`. Console tests (91): `npm test` from `port-console/`.
+Java tests (159, against a throwaway MySQL schema): `.\gradlew test` from
+`port-scheduler-api/`. Console tests (92): `npm test` from `port-console/`.
 
 ## Data
 

@@ -95,7 +95,9 @@ button; whether to cancel is left to the planner.
    anchorage instead (*Report arrival at the anchorage*, a DCSA anchorage
    event). The terminal may then bring it in sooner, with a new requested
    time to accept, and the page shows "At the anchorage, …" until it berths;
-   so do the planner's arrivals table and visit drawer.
+   so do the planner's arrivals table and visit drawer. A warning the
+   terminal gives with an event it applied (an estimate already past) shows
+   as a notice.
 
 If the terminal cancels the call, this page says so, with the reason, instead
 of going blank. It also says by when the terminal expects the next estimate.
@@ -245,7 +247,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 91 tests
+npm test             # 92 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

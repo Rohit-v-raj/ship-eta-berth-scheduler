@@ -134,7 +134,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 157 tests in thirteen classes (§10)
+    └── test/java/com/port/scheduler/        # 159 tests in thirteen classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -722,9 +722,18 @@ Before anything is looked up or stored, the receiver checks what it can from
 the event alone. An event naming another port (`portCall.UNLocationCode` or
 the service location's code) is refused with "This terminal is at NOFRO; the
 event is for ...". An event naming no port is taken as meant here. An IMO
-number must have 7 digits and an MMSI 9; a name used as the vessel's code
-(when neither is given) is at most 32 characters. A refused event therefore
-leaves no vessel record behind. A database error is reported to the sender as
+number must have 7 digits and pass its check digit (the first six digits
+weighted 7 to 2, summed; the sum's last digit), and an MMSI 9 digits; a name
+used as the vessel's code (when neither is given) is at most 32 characters. A
+refused event therefore leaves no vessel record behind. An estimated arrival
+more than 5 minutes past is applied, with a `WARN` saying the ship is planned
+from now.
+
+The controller reads each event of a request on its own. One that cannot be
+read (a time with no UTC offset, a word where a number belongs) is refused by
+itself, with an `ERROR` at the field's path such as
+`$.events[1].timestamp.serviceDateTime`, and the other events are still
+applied. Only a body that is not JSON, or has no events, is refused whole. A database error is reported to the sender as
 "The event could not be stored" and logged; the database's own message, which
 names tables and columns, is not sent.
 
@@ -863,7 +872,7 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 157 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 159 tests):
 
 | Test class | What it proves |
 |---|---|

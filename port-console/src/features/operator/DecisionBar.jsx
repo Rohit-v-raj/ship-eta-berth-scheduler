@@ -49,10 +49,12 @@ export function DecisionBar({ visit, port }) {
     setBusy(name)
     setError(null)
     try {
-      await sendEvents(events, label)
+      // the terminal applied the event; a warning it gave with it (an estimate already past) is shown too
+      const warnings = await sendEvents(events, label)
       await refresh()
       setDialog(null)
       toast.success(done)
+      for (const warning of warnings) toast.warning(warning.message)
     } catch (failure) {
       await refresh()
       setError(explain(failure.message))

@@ -390,6 +390,13 @@ public class VesselVisitService {
         if (imoNumber != null && !imoNumber.matches("\\d{7}")) {
             throw new IllegalArgumentException("vesselIMONumber must be 7 digits");
         }
+        if (imoNumber != null) {
+            int expected = imoCheckDigit(imoNumber);
+            if (imoNumber.charAt(6) - '0' != expected) {
+                throw new IllegalArgumentException("vesselIMONumber " + imoNumber
+                        + " fails its check digit: the last digit should be " + expected);
+            }
+        }
         if (mmsi != null && !mmsi.matches("\\d{9}")) {
             throw new IllegalArgumentException("vesselMMSINumber must be 9 digits");
         }
@@ -400,6 +407,19 @@ public class VesselVisitService {
             throw new IllegalArgumentException(
                     "vesselName can be at most 32 characters when no vesselIMONumber or vesselMMSINumber is given");
         }
+    }
+
+    /**
+     * The check digit of an IMO ship number: the first six digits weighted 7, 6,
+     * 5, 4, 3 and 2, summed; the last digit of the sum. 9321483: 9×7 + 3×6 + 2×5
+     * + 1×4 + 4×3 + 8×2 = 123, so 3.
+     */
+    static int imoCheckDigit(String imoNumber) {
+        int sum = 0;
+        for (int i = 0; i < 6; i++) {
+            sum += (imoNumber.charAt(i) - '0') * (7 - i);
+        }
+        return sum % 10;
     }
 
     private static BigDecimal metres(double value) {

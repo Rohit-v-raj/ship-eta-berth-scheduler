@@ -40,7 +40,7 @@ After feature engineering, a single voyage is just a table of pings, one row per
 **60 seconds** (we resampled to a steady rate). Example (numbers rounded):
 
 ```
-Voyage 2020-07-27_257039490_0     (71 pings, ~70 minutes long)
+One voyage on 2020-07-27     (vessel withheld; 71 pings, ~70 minutes long)
 
  ping#   time       lat      lon     sog   dist_to_dest   minutes_to_arrival
  ─────   ────────   ──────   ─────   ────  ────────────   ──────────────────

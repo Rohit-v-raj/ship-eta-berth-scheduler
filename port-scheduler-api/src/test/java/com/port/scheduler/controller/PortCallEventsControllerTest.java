@@ -17,11 +17,15 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -90,8 +94,8 @@ class PortCallEventsControllerTest {
 
     @Test
     void eventsSentToTheTerminalAreAnsweredWithFeedbackPerEvent() throws Exception {
-        given(receiver.receive(any())).willReturn(
-                List.of(new FeedbackElement("WARN", "Not processed: this terminal acts on BERTH and ANCHORAGE events only", "$.events[0]")));
+        given(receiver.receive(any(Event.class), eq("$.events[0]"))).willReturn(
+                Optional.of(new FeedbackElement("WARN", "Not processed: this terminal acts on BERTH and ANCHORAGE events only", "$.events[0]")));
 
         mvc.perform(post("/api/port-call/v2/events").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"events\":[{\"vessel\":{\"vesselIMONumber\":\"9321483\"},\"isFYI\":false,"
@@ -102,6 +106,32 @@ class PortCallEventsControllerTest {
                 .andExpect(header().string("API-Version", "2.0.0"))
                 .andExpect(jsonPath("$.feedbackElements[0].severity").value("WARN"))
                 .andExpect(jsonPath("$.feedbackElements[0].propertyPath").value("$.events[0]"));
+    }
+
+    @Test
+    void anEventThatCannotBeReadIsRefusedByItselfNamingTheFieldAndTheOthersAreApplied() throws Exception {
+        given(receiver.receive(any(Event.class), any())).willReturn(Optional.empty());
+        String ok = "{\"vessel\":{\"vesselName\":\"SOLVIK\"},"
+                + "\"portCallService\":{\"portCallServiceTypeCode\":\"BERTH\",\"portCallServiceEventTypeCode\":\"ARRI\"},"
+                + "\"timestamp\":{\"classifierCode\":\"EST\",\"serviceDateTime\":\"2026-10-12T14:00:00Z\"}}";
+        String noOffset = ok.replace("SOLVIK", "KINN").replace("2026-10-12T14:00:00Z", "2026-10-12T14:00:00");
+        String wordForNumber = "{\"vessel\":{\"vesselName\":\"HAVBRIS\",\"lengthOverall\":\"long\"}}";
+
+        mvc.perform(post("/api/port-call/v2/events").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"events\":[" + ok + "," + noOffset + "," + wordForNumber + "]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.feedbackElements.length()").value(2))
+                .andExpect(jsonPath("$.feedbackElements[0].severity").value("ERROR"))
+                .andExpect(jsonPath("$.feedbackElements[0].propertyPath").value("$.events[1].timestamp.serviceDateTime"))
+                .andExpect(jsonPath("$.feedbackElements[0].message").value(
+                        "timestamp.serviceDateTime: '2026-10-12T14:00:00' is not a date-time with a UTC offset; "
+                                + "send ISO 8601, for example 2026-11-25T10:00:00Z"))
+                .andExpect(jsonPath("$.feedbackElements[1].propertyPath").value("$.events[2].vessel.lengthOverall"))
+                .andExpect(jsonPath("$.feedbackElements[1].message").value("vessel.lengthOverall: 'long' could not be read as a number"));
+        // the readable event is applied; the other two never reach the receiver
+        then(receiver).should().receive(any(Event.class), eq("$.events[0]"));
+        then(receiver).should(never()).receive(any(Event.class), eq("$.events[1]"));
+        then(receiver).should(never()).receive(any(Event.class), eq("$.events[2]"));
     }
 
     @Test

@@ -69,36 +69,54 @@ public class PortCallEventReceiver {
     }
 
     public List<FeedbackElement> receive(List<Event> events) {
-        String here = portRepository.findAll().stream().findFirst().map(Port::getUnLocode).orElse(null);
+        String here = thisPort();
         List<FeedbackElement> feedback = new ArrayList<>();
         for (int i = 0; i < events.size(); i++) {
-            String path = "$.events[" + i + "]";
-            Event event = events.get(i);
-            try {
-                // one transaction per event: its effects and its receipt are kept together, or neither
-                Note note = transactions.execute(status -> apply(event, here));
-                if (note != null) {
-                    feedback.add(new FeedbackElement(note.severity(), note.message(), path));
-                }
-            } catch (StaleEventException e) {
-                feedback.add(new FeedbackElement("WARN", e.getMessage(), path));
-            } catch (DataAccessException | TransactionException e) {
-                // the database's own message names tables and columns; the sender gets a plain one
-                log.warn("DCSA event {} could not be stored", path, e);
-                feedback.add(new FeedbackElement("ERROR", "The event could not be stored", path));
-            } catch (RuntimeException e) {
-                feedback.add(new FeedbackElement("ERROR", e.getMessage(), path));
-            }
+            receive(events.get(i), "$.events[" + i + "]", here).ifPresent(feedback::add);
         }
         return feedback;
     }
 
-    /** A note to the sender about an event understood but not acted on: {@code WARN} or {@code INFO}. */
+    /**
+     * One event, reported against {@code path}, its place in the request: what
+     * the sender is told about it, or empty when it was applied with nothing to
+     * report. The controller uses this to apply each event that could be read
+     * while reporting one that could not.
+     */
+    public Optional<FeedbackElement> receive(Event event, String path) {
+        return receive(event, path, thisPort());
+    }
+
+    private Optional<FeedbackElement> receive(Event event, String path, String here) {
+        try {
+            // one transaction per event: its effects and its receipt are kept together, or neither
+            Note note = transactions.execute(status -> apply(event, here));
+            return note == null ? Optional.empty() : Optional.of(new FeedbackElement(note.severity(), note.message(), path));
+        } catch (StaleEventException e) {
+            return Optional.of(new FeedbackElement("WARN", e.getMessage(), path));
+        } catch (DataAccessException | TransactionException e) {
+            // the database's own message names tables and columns; the sender gets a plain one
+            log.warn("DCSA event {} could not be stored", path, e);
+            return Optional.of(new FeedbackElement("ERROR", "The event could not be stored", path));
+        } catch (RuntimeException e) {
+            return Optional.of(new FeedbackElement("ERROR", e.getMessage(), path));
+        }
+    }
+
+    private String thisPort() {
+        return portRepository.findAll().stream().findFirst().map(Port::getUnLocode).orElse(null);
+    }
+
+    /**
+     * A note to the sender: {@code WARN} or {@code INFO} for an event understood
+     * but not acted on, or {@code WARN} for one applied with a caveat.
+     */
     private record Note(String severity, String message) {}
 
     /**
      * Applies one event. Returns a note when the event was understood but
-     * deliberately not acted on. Everything that can be checked from the event
+     * deliberately not acted on, or applied with a caveat (an estimated
+     * arrival already past). Everything that can be checked from the event
      * alone is checked before the vessel is looked up, so a refused event
      * leaves no vessel record behind.
      *
@@ -126,6 +144,7 @@ public class PortCallEventReceiver {
         Vessel vessel = event.vessel();
 
         String code;
+        Note caveat = null;
         if (omitted(event)) {
             checkInOrder(vessel, sentAt);
             code = vesselId(vessel);
@@ -172,6 +191,10 @@ public class PortCallEventReceiver {
                     checkInOrder(vessel, sentAt);
                     code = vesselId(vessel);
                     visits.declareEta(code, timestamp.serviceDateTime(), position, size);
+                    if (timestamp.serviceDateTime().isBefore(now.minus(CLOCK_LEEWAY))) {
+                        caveat = new Note("WARN", "Applied, but the estimated arrival "
+                                + timestamp.serviceDateTime() + " has already passed: the ship is planned from now");
+                    }
                 }
                 case "PLN" -> {
                     if (!arrival) {
@@ -194,7 +217,8 @@ public class PortCallEventReceiver {
                         "Unknown classifierCode '" + timestamp.classifierCode() + "'; use EST, PLN or ACT");
             }
         }
-        return applied(event, code, sentAt, seen, now);
+        applied(event, code, sentAt, seen, now);
+        return caveat;
     }
 
     /** After an event is applied: note the sender's time for the vessel and keep the event's id. */
