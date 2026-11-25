@@ -66,6 +66,8 @@
  * @property {string|null} ptaBerth  planned: the ship's acceptance of the request
  * @property {string|null} ataBerth  actual arrival
  * @property {string|null} atdBerth
+ * @property {string|null} ataAnchorage  when the ship anchored to wait for its berth
+ * @property {string|null} atdAnchorage  when it left the anchorage; null while it lies there
  * @property {number|null} plannedServiceMinutes
  * @property {PositionReport|null} lastReport
  * @property {string|null} requestedAt  when the terminal issued the request that now stands

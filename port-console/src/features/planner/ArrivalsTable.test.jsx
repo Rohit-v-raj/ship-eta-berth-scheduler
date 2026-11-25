@@ -52,6 +52,19 @@ describe('ArrivalsTable', () => {
     expect(within(row('KINN')).queryByText(/Not arrived|Estimate due|Draft due/)).not.toBeInTheDocument()
   })
 
+  it('shows how long a ship has lain at the anchorage, until it berths', () => {
+    const now = Date.now()
+    const [alongside, reserved, waiting] = makeVisits(now)
+    const anchored = { ...reserved, phase: 'ARRIVED', ataAnchorage: new Date(now - 2 * 3_600_000).toISOString() }
+    const berthed = { ...alongside, ataAnchorage: new Date(now - 30 * 3_600_000).toISOString() }
+    renderWithApp(<ArrivalsTable visits={[berthed, anchored, waiting]} onSelect={() => {}} />)
+
+    const row = (name) => screen.getByRole('button', { name }).closest('tr')
+    expect(within(row('SOLVIK')).getByText('B1 reserved')).toBeInTheDocument()
+    expect(within(row('SOLVIK')).getByText('At the anchorage, 2 h')).toBeInTheDocument()
+    expect(within(row('KINN')).queryByText(/At the anchorage/)).not.toBeInTheDocument()
+  })
+
   it('opens a visit from its vessel name', async () => {
     const onSelect = vi.fn()
     renderWithApp(<ArrivalsTable visits={makeVisits()} onSelect={onSelect} />)

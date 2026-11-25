@@ -60,7 +60,7 @@ flowchart LR
     HM["HarborMasterAgentService"]
   end
   RP["Repositories<br/>(8 Spring Data interfaces)"]
-  DB[("MySQL port_core<br/>11 tables, Flyway V1-V10")]
+  DB[("MySQL port_core<br/>11 tables, Flyway V1-V11")]
   PY["FastAPI predict_api.py<br/>port 8000, /predict"]
   ML["models/eta_xgb.pkl<br/>XGBoost"]
   GM["Gemini"]
@@ -99,7 +99,7 @@ flowchart LR
 <h2 id="apis">2. What each API does</h2>
 <div class="box"><table>
 <tr><th>Endpoint</th><th>Who uses it</th><th>What it does</th><th>Code path</th></tr>
-<tr><td><code>POST /api/port-call/v2/events</code></td><td>Vessel operator, carrier system</td><td>The berth conversation, as DCSA Port Call events: an estimated arrival (EST) opens or replans a call and may carry the ship's position; a planned arrival (PLN) accepts the terminal's request; actual arrival and departure (ACT); an omitted call. The only way a call begins, changes or ends. Answers with feedback per event; a stale acceptance is refused there.</td><td><code>PortCallEventsController.receive</code> → <code>PortCallEventReceiver.receive</code> → <code>VesselVisitService.declareEta</code> / <code>confirm</code> / <code>arrived</code> / <code>departed</code> / <code>omit</code> → <code>BerthService</code></td></tr>
+<tr><td><code>POST /api/port-call/v2/events</code></td><td>Vessel operator, carrier system</td><td>The berth conversation, as DCSA Port Call events: an estimated arrival (EST) opens or replans a call and may carry the ship's position; a planned arrival (PLN) accepts the terminal's request; actual arrival and departure (ACT); arrival at and departure from the anchorage (ANCHORAGE STRT and CMPL); an omitted call. The only way a call begins, changes or ends. Answers with feedback per event; a stale acceptance is refused there.</td><td><code>PortCallEventsController.receive</code> → <code>PortCallEventReceiver.receive</code> → <code>VesselVisitService.declareEta</code> / <code>confirm</code> / <code>arrived</code> / <code>departed</code> / <code>omit</code> → <code>BerthService</code></td></tr>
 <tr><td><code>GET /api/port-call/v2/events</code></td><td>Any DCSA party</td><td>Publishes the timestamps in DCSA Port Call 2.0 format, with filters and paging. This is where a carrier reads the terminal's requested arrival (REQ).</td><td><code>PortCallEventsController.events</code> → <code>PortCallEventPublisher.find</code></td></tr>
 <tr><td><code>POST /api/operator/eta</code></td><td>Vessel operator</td><td>The operator's calculator: the model's ETA for a position and, when the terminal has requested an arrival, the speed that meets it. Stores nothing.</td><td><code>VesselOperatorController.eta</code> → <code>EtaService.predict</code>, <code>PortViewService.visits</code>, <code>PlanningRules.advisedSpeedKnots</code></td></tr>
 <tr><td><code>GET /api/port</code></td><td>Console</td><td>The port, its terminals and its berths with coordinates and limits. Read only.</td><td><code>ConsoleController.port</code> → <code>PortViewService.port</code></td></tr>
@@ -272,7 +272,7 @@ erDiagram
 <tr><td>Java: request and response shapes</td><td><code>model/</code> EtaQuery, EtaEstimate, EtaRequest, EtaResponse; <code>model/view/</code> PortView, VisitView, VisitDetailView, BerthPlanView</td><td>The JSON of our own endpoints.</td></tr>
 <tr><td>Java: errors</td><td><code>exceptions/</code> GlobalExceptionHandler, BerthNotFound, VisitNotFound, VisitConflict</td><td>404 and 409 responses.</td></tr>
 <tr><td>Database schema</td><td><code>resources/db/migration/V1</code> to <code>V9</code></td><td>Topology, vessel, visit tables, demo port, IMO width, planned service time, who cancelled a call, berth maintenance.</td></tr>
-<tr><td>Tests</td><td><code>src/test/</code>, 13 classes, 153 tests; <code>port-console/</code>, 87 tests</td><td>Java: migrations, scheduling flow, planning rules, the read views, each controller's JSON, DCSA publishing and receiving. Console: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts.</td></tr>
+<tr><td>Tests</td><td><code>src/test/</code>, 13 classes, 157 tests; <code>port-console/</code>, 91 tests</td><td>Java: migrations, scheduling flow, planning rules, the read views, each controller's JSON, DCSA publishing and receiving. Console: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts.</td></tr>
 </table></div>
 <p class="note">Java paths are under <code>port-scheduler-api/src/main/java/com/port/scheduler/</code>.</p>
 
@@ -281,13 +281,13 @@ erDiagram
 <tr><th>Area</th><th>State</th><th>Notes</th></tr>
 <tr><td>ETA model and its service</td><td class="ok">Working</td><td>XGBoost, 69 min mean error on unseen vessels. Its label counts idle time near the berth as sailing, which makes it pessimistic close to port.</td></tr>
 <tr><td>Persistence and data model</td><td class="ok">Working</td><td>11 tables, state survives a restart.</td></tr>
-<tr><td>Berth plan</td><td class="ok">Working</td><td>Each berth holds a sequence of bookings across the week; a ship due soon uses the gap before a booking without delaying it. A booking moves to a berth that can take it more than 4 hours sooner. A ship comes alongside at its turn: an early ship never delays one booked ahead of it. Ships due beyond 7 days wait in a queue with no berth. Times are worked out again whenever the plan changes.</td></tr>
+<tr><td>Berth plan</td><td class="ok">Working</td><td>Each berth holds a sequence of bookings across the week; a ship due soon uses the gap before a booking without delaying it. A booking moves to a berth that can take it more than 4 hours sooner. A ship comes alongside at its turn: an early ship never delays one booked ahead of it. A ship that anchors early is brought in as soon as that delays no one. Ships due beyond 7 days wait in a queue with no berth. Times are worked out again whenever the plan changes.</td></tr>
 <tr><td>Berth fit and maintenance</td><td class="ok">Working</td><td>A ship's length and beam are required once, with its first estimate; its draft per call is due a day before arrival. A ship is given only a berth its length, beam and draft fit, and refused if it fits none. Maintenance windows are recorded in advance and planned around.</td></tr>
 <tr><td>Late booked ships</td><td class="ok">Working</td><td>A ship holding a booking that falls more than 4 hours behind its agreed time gives its place up, if another ship can be alongside on that berth sooner; it is planned again at once.</td></tr>
 <tr><td>Overstays</td><td class="ok">Working</td><td>A ship past its planned end is taken to be still there and is flagged; the planner sets when it is expected to leave. An hour is kept between ships.</td></tr>
 <tr><td>Unanswered requests</td><td class="ok">Working</td><td>A berth is held from the terminal's answer. A reply 60 minutes late is flagged on the planner's screen, and the planner can cancel the call. Nothing is cancelled automatically.</td></tr>
 <tr><td>Operator's calculator</td><td class="ok">Working</td><td>The model's ETA for a position and the speed that meets the terminal's requested arrival. The terminal itself sends a time, never a speed.</td></tr>
-<tr><td>Operator decisions</td><td class="ok">Working</td><td>Estimate, accept, propose another time, omit, arrive, depart: all DCSA Port Call events, the one route into a call.</td></tr>
+<tr><td>Operator decisions</td><td class="ok">Working</td><td>Estimate, accept, propose another time, omit, anchor, arrive, depart: all DCSA Port Call events, the one route into a call.</td></tr>
 <tr><td>Console (React)</td><td class="ok">Working</td><td>Planner and operator screens, event feed, wire inspector, stories. Seats instead of login.</td></tr>
 <tr><td>DCSA Port Call 2.0</td><td class="ok">Working</td><td>Publishes and receives berth events. Not run through DCSA's conformance sandbox.</td></tr>
 <tr><td>Time-driven replanning</td><td class="todo">Not started</td><td>Times follow events, not the clock: an overstay is flagged on read, but the ships behind it are re-timed only at the next event.</td></tr>

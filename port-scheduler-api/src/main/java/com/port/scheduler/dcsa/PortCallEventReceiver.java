@@ -33,10 +33,13 @@ import java.util.Optional;
 /**
  * Applies DCSA Port Call 2.0 events sent to this terminal by a vessel operator.
  *
- * Only the berth service is acted on: an estimated arrival opens or refreshes
- * the visit and is answered with a requested arrival, a planned arrival
- * confirms that request, an actual arrival or departure moves the vessel on
- * and off its berth, and an omitted call is cancelled. Each event is applied
+ * The berth service is acted on: an estimated arrival opens or refreshes the
+ * visit and is answered with a requested arrival, a planned arrival confirms
+ * that request, an actual arrival or departure moves the vessel on and off its
+ * berth, and an omitted call is cancelled. So is the anchorage: a vessel that
+ * is early anchors and reports it (actual STRT), which may bring its berth
+ * forward, and reports leaving (actual CMPL). Other services are answered
+ * "not processed". Each event is applied
  * in its own transaction, so one that fails does not undo the others; what
  * went wrong is reported per event, as the standard specifies. An event for
  * another port is refused. A repeated event is answered and not applied
@@ -135,8 +138,26 @@ public class PortCallEventReceiver {
                 throw new IllegalArgumentException(
                         "An event needs a portCallService and a timestamp with classifierCode and serviceDateTime");
             }
+            if ("ANCHORAGE".equals(service.portCallServiceTypeCode())) {
+                // a ship that is early anchors and says so; the times are facts, so only actual ones are taken
+                if (!"ACT".equals(timestamp.classifierCode())) {
+                    return new Note("WARN", "Not processed: this terminal records actual anchorage times only");
+                }
+                String eventType = service.portCallServiceEventTypeCode();
+                if (!"STRT".equals(eventType) && !"CMPL".equals(eventType)) {
+                    throw new IllegalArgumentException(
+                            "An anchorage event is STRT (anchored) or CMPL (left the anchorage), not '" + eventType + "'");
+                }
+                code = vesselId(vessel);
+                if ("STRT".equals(eventType)) {
+                    visits.anchored(code, timestamp.serviceDateTime());
+                } else {
+                    visits.leftAnchorage(code, timestamp.serviceDateTime());
+                }
+                return applied(event, code, sentAt, seen, now);
+            }
             if (!"BERTH".equals(service.portCallServiceTypeCode())) {
-                return new Note("WARN", "Not processed: this terminal acts on BERTH events only");
+                return new Note("WARN", "Not processed: this terminal acts on BERTH and ANCHORAGE events only");
             }
             boolean arrival = "ARRI".equals(service.portCallServiceEventTypeCode());
             switch (timestamp.classifierCode()) {
@@ -173,6 +194,11 @@ public class PortCallEventReceiver {
                         "Unknown classifierCode '" + timestamp.classifierCode() + "'; use EST, PLN or ACT");
             }
         }
+        return applied(event, code, sentAt, seen, now);
+    }
+
+    /** After an event is applied: note the sender's time for the vessel and keep the event's id. */
+    private Note applied(Event event, String code, Instant sentAt, Optional<ReceivedEvent> seen, Instant now) {
         if (sentAt != null) {
             visits.noteSent(code, sentAt);
         }

@@ -33,6 +33,11 @@ export function standingOf(visit) {
   return visit.berth.status === 'ACTIVE' ? STANDING.ALONGSIDE : STANDING.RESERVED
 }
 
+/** Whether the ship lies at the anchorage now: it anchored, has not left, and is not alongside. */
+export function atAnchorage(visit) {
+  return visit.ataAnchorage != null && visit.atdAnchorage == null && visit.ataBerth == null
+}
+
 export const AGREEMENT = {
   ARRIVED: 'ARRIVED',
   AGREED: 'AGREED',

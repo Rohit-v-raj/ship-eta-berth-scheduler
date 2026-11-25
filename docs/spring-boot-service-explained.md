@@ -134,7 +134,7 @@ port-scheduler-api/
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
     │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 153 tests in thirteen classes (§10)
+    └── test/java/com/port/scheduler/        # 157 tests in thirteen classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -519,7 +519,8 @@ Key ideas:
   2. The bookings keep their order and are timed again: each starts when the
      berth is free after the one before it and the ship can be there, clear of
      maintenance. A ship moves up when the berth frees early, and back behind
-     an overrun, never before its own estimate.
+     an overrun, never before its own estimate (for a ship at anchor, one
+     passage after it anchored).
   3. A ship that has just sent a new estimate keeps its booking unless the
      late rule below takes it away.
   4. Ships whose booking the planner's maintenance took away are placed
@@ -588,6 +589,17 @@ Key ideas:
   ship it waits for, worked out on read, and the console shows it in place of
   *Report arrival*. `release` acts only on the ship alongside; a berth with
   only bookings answers `false` and records nothing.
+- **A ship that is early anchors, and is brought in sooner.** It reports its
+  arrival at the anchorage (DCSA `ANCHORAGE` `STRT`, an actual time) and its
+  departure from it (`CMPL`); the visit's phase becomes `ARRIVED`. From then
+  on the plan takes it to be ready one passage after it anchored
+  (`port.planning.anchorage-to-berth-minutes`, 60, our own choice), whatever
+  its estimate said (`BerthService.readyAt`). Its booking moves up behind the
+  ships booked before it, or to a berth that can take it more than 4 hours
+  sooner in a gap that delays no one, and it is asked for the new time ("At
+  the anchorage since …, ready to come in"), which it accepts again. No
+  further estimate is expected of it. Refused: anchoring while alongside or
+  already at anchor, leaving an anchorage it is not at.
 - **What a ship reports is checked against its call.** A ship alongside cannot
   omit its call or send a new estimated arrival; a departure needs an arrival,
   may not be dated before it, and is recorded at the time the ship sent, as
@@ -851,13 +863,13 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 153 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 157 tests):
 
 | Test class | What it proves |
 |---|---|
 | `SchemaMigrationTest` | The migrations apply to an empty database, the entity classes match the result, and MySQL refuses a second ship alongside a berth while allowing several bookings |
 | `BerthSchedulingTest` | Fill, book behind, release, move, accept, omit and replan; booked ships' times refreshed; the planned end following the actual arrival; the terminal's cancellation; berth fit; maintenance; a booked ship that falls behind; the booking horizon; overstays; reports checked against the call (omit or estimate while alongside, departure without or before arrival, actual times in the future, an estimate sent again). All through the real services and a real database |
-| `PortCallEventReceiverTest` | Each DCSA event the operator can send, a repeat applied once and one overtaken by a later event not applied, including a position, a stale acceptance, an arrival before the ship's turn and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
+| `PortCallEventReceiverTest` | Each DCSA event the operator can send, a repeat applied once and one overtaken by a later event not applied, including a position, a stale acceptance, an arrival before the ship's turn, the anchorage and an omitted call; events for another port and identifiers in the wrong form refused, leaving no record |
 | `PortCallEventPublisherTest` | What the feed publishes, its filters and its cursor |
 | `PortViewServiceTest` | The console's views after real scheduling |
 | `PortCallEventsControllerTest`, `VesselOperatorControllerTest`, `ConsoleControllerTest` | The JSON each endpoint returns, including the `404` and `400` cases |
@@ -865,7 +877,7 @@ The same behaviour is covered by automated tests (`.\gradlew test`, 153 tests):
 | `EtaServiceTest` | The model service client gives up in time when the service is down or accepts and never answers |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production (the other scheduling tests run without it so their times stay plain sums) |
 | `VesselSizeTest` | Length and beam required once per ship and kept on record; the largest draft kept and used for the fit; the draft due a day before arrival |
-| `BerthSequenceTest` | Several ships per berth: the gap before a booking used without delaying it, a booking held up behind an overstay moving to a berth more than 4 hours sooner or staying, a ship moved for maintenance keeping its claim, a late ship giving its place to the one behind, arrivals at an occupied berth and before the ship's turn refused, an early ship gone before the next booking taken in |
+| `BerthSequenceTest` | Several ships per berth: the gap before a booking used without delaying it, a booking held up behind an overstay moving to a berth more than 4 hours sooner or staying, a ship moved for maintenance keeping its claim, a late ship giving its place to the one behind, arrivals at an occupied berth and before the ship's turn refused, an early ship gone before the next booking taken in, a ship at anchor brought in behind the ship booked before it or moved to a berth much sooner, anchorage reports checked |
 
 The ones that touch the database need MySQL running. They use a separate
 schema, `port_core_test`, which is wiped and rebuilt on every run, and they

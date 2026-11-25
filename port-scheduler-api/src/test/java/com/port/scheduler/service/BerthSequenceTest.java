@@ -36,7 +36,9 @@ import static org.assertj.core.api.Assertions.within;
  * booking without delaying it, a booking held up by the ship before it moves
  * to a berth that can take it much sooner, and a ship reports its arrival
  * only at its turn: at a berth no one else lies at, and before a ship booked
- * ahead of it only if it is gone by then. On the four seeded berths: B1 and B2
+ * ahead of it only if it is gone by then. A ship that is early anchors, and
+ * is brought in as soon as it can be without passing a ship booked before it
+ * or delaying a booking. On the four seeded berths: B1 and B2
  * take ships up to 190 m, B3 and B4 up to 140 m.
  */
 @PersistenceTest
@@ -264,6 +266,95 @@ class BerthSequenceTest {
         assertThat(lineOf(berth)).containsExactly("CORA", passed);
         assertThat(visitOf(passed).getRtaBerth()).isEqualTo(passedAsked);
         assertThat(requestsTo(passed)).hasSize(1);
+    }
+
+    // ---- the anchorage
+
+    @Test
+    void aShipAtAnchorIsBroughtInRightAfterTheShipBookedBeforeIt() {
+        sized("HELL", Duration.ZERO);
+        visitService.arrived("HELL", Instant.now());          // alongside B1 or B2
+        sized("ASKV", Duration.ofHours(72));                  // the other, three days out
+        visitService.confirm("ASKV", null);
+        sized("DALE", Duration.ofHours(1));                   // ahead of ASKV, in the gap before it
+        String berth = viewOf("ASKV").berth().berthCode();
+        assertThat(lineOf(berth)).containsExactly("DALE", "ASKV");
+        Instant daleAsked = visitOf("DALE").getRtaBerth();
+        Instant daleLeaves = windowOf("DALE").getPlannedEnd();
+
+        Instant anchored = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        visitService.anchored("ASKV", anchored);
+
+        // ASKV is here: it comes in once DALE is done, not in three days, and DALE does not move
+        assertThat(lineOf(berth)).containsExactly("DALE", "ASKV");
+        assertThat(windowOf("ASKV").getPlannedStart()).isEqualTo(daleLeaves);
+        assertThat(visitOf("DALE").getRtaBerth()).isEqualTo(daleAsked);
+        assertThat(requestsTo("DALE")).hasSize(1);
+        VesselVisit askv = visitOf("ASKV");
+        assertThat(askv.getPhase()).isEqualTo(VisitPhase.ARRIVED);
+        assertThat(askv.getAtaAnchorage()).isEqualTo(anchored);
+        assertThat(askv.getRtaBerth()).isEqualTo(daleLeaves);
+        assertThat(askv.getPtaBerth()).isNull();   // a new requested time, which ASKV accepts again
+        assertThat(requestsTo("ASKV")).last().satisfies(e ->
+                assertThat(e.getRemarks()).isEqualTo("At the anchorage since " + anchored + ", ready to come in"));
+        // it is here, so no further estimate is expected of it
+        assertThat(viewOf("ASKV").nextEstimateBy()).isNull();
+        assertThat(viewOf("ASKV").estimateDueSince()).isNull();
+        assertThat(viewOf("ASKV").ataAnchorage()).isEqualTo(anchored);
+    }
+
+    @Test
+    void aShipAtAnchorMovesToABerthThatCanTakeItMuchSoonerWithoutDelayingItsBooking() {
+        sized("HELL", Duration.ZERO);
+        visitService.arrived("HELL", Instant.now());          // alongside one large berth for a day
+        sized("DALE", Duration.ofHours(1));                   // the other, from an hour out
+        sized("GULL", Duration.ofHours(60));                  // after HELL, whose berth is free first
+        sized("ASKV", Duration.ofHours(72));                  // after DALE: GULL is in the way on the first
+        String first = viewOf("HELL").berth().berthCode();
+        String second = viewOf("DALE").berth().berthCode();
+        assertThat(lineOf(first)).containsExactly("HELL", "GULL");
+        assertThat(lineOf(second)).containsExactly("DALE", "ASKV");
+        Instant hellLeaves = Instant.now().plus(Duration.ofHours(2)).truncatedTo(ChronoUnit.SECONDS);
+        visitService.expectCompletion(visitOf("HELL").getVisitRef(), hellLeaves, null);
+        Instant gullAsked = visitOf("GULL").getRtaBerth();
+        assertThat(lineOf(second)).containsExactly("DALE", "ASKV");   // not here yet: nothing to gain
+
+        visitService.anchored("ASKV", Instant.now());
+
+        // HELL's berth is free in two hours, and ASKV's stay ends long before GULL is due there
+        assertThat(lineOf(first)).containsExactly("HELL", "ASKV", "GULL");
+        assertThat(lineOf(second)).containsExactly("DALE");
+        assertThat(windowOf("ASKV").getPlannedStart()).isEqualTo(hellLeaves);
+        assertThat(visitOf("GULL").getRtaBerth()).isEqualTo(gullAsked);
+        assertThat(requestsTo("ASKV")).last().satisfies(e -> assertThat(e.getRemarks())
+                .startsWith("Moved from " + second + " to " + first + ", which can take it "));
+    }
+
+    @Test
+    void anchorageReportsAreCheckedAgainstTheCall() {
+        sized("ALDA", Duration.ofHours(5));
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+
+        assertThatThrownBy(() -> visitService.leftAnchorage("ALDA", now))
+                .isInstanceOf(VisitConflictException.class).hasMessage("Vessel ALDA is not at the anchorage");
+        assertThatThrownBy(() -> visitService.anchored("ALDA", now.plus(Duration.ofHours(1))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("An arrival at the anchorage cannot be in the future");
+
+        visitService.anchored("ALDA", now);
+        assertThatThrownBy(() -> visitService.anchored("ALDA", now))
+                .isInstanceOf(VisitConflictException.class)
+                .hasMessage("Vessel ALDA has been at the anchorage since " + now + "; it reports leaving it first");
+        assertThatThrownBy(() -> visitService.leftAnchorage("ALDA", now.minus(Duration.ofMinutes(5))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("Leaving the anchorage");
+
+        visitService.leftAnchorage("ALDA", now);
+        assertThat(visitOf("ALDA").getAtdAnchorage()).isEqualTo(now);
+        visitService.arrived("ALDA", Instant.now());
+        assertThatThrownBy(() -> visitService.anchored("ALDA", Instant.now()))
+                .isInstanceOf(VisitConflictException.class)
+                .hasMessage("Vessel ALDA is alongside; it cannot be at the anchorage");
     }
 
     /** V001 alongside B1 since now, for a typical stay; V002 to V004 booked on B2 to B4 from two hours out. */

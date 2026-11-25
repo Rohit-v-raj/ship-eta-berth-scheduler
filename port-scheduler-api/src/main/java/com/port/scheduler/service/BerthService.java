@@ -113,6 +113,7 @@ public class BerthService {
     private final Duration bookingHorizon;
     private final Duration overstayStep;
     private final Duration turnaround;
+    private final Duration passage;
 
     public BerthService(BerthRepository berthRepository,
                         BerthAllocationRepository allocationRepository,
@@ -123,12 +124,14 @@ public class BerthService {
                         @Value("${port.planning.late-tolerance-minutes:240}") long lateToleranceMinutes,
                         @Value("${port.planning.booking-horizon-hours:168}") long bookingHorizonHours,
                         @Value("${port.planning.overstay-step-minutes:60}") long overstayStepMinutes,
-                        @Value("${port.planning.berth-turnaround-minutes:60}") long turnaroundMinutes) {
+                        @Value("${port.planning.berth-turnaround-minutes:60}") long turnaroundMinutes,
+                        @Value("${port.planning.anchorage-to-berth-minutes:60}") long passageMinutes) {
         this.reissueThreshold = Duration.ofMinutes(reissueThresholdMinutes);
         this.lateTolerance = Duration.ofMinutes(lateToleranceMinutes);
         this.bookingHorizon = Duration.ofHours(bookingHorizonHours);
         this.overstayStep = Duration.ofMinutes(overstayStepMinutes);
         this.turnaround = Duration.ofMinutes(turnaroundMinutes);
+        this.passage = Duration.ofMinutes(passageMinutes);
         this.berthRepository = berthRepository;
         this.allocationRepository = allocationRepository;
         this.maintenanceRepository = maintenanceRepository;
@@ -229,6 +232,57 @@ public class BerthService {
             throw new IllegalArgumentException("The departure (" + at + ") is before the arrival (" + arrived + ")");
         }
         leave(allocation, berths, at, EventSource.VESSEL);
+    }
+
+    /**
+     * The vessel reports it has anchored to wait for its berth. It is here:
+     * from now on the plan takes it to be ready to come in one passage from
+     * the anchorage after it anchored, whatever its estimate said, and works
+     * the plan out again. Its booking can move earlier, but never ahead of a
+     * vessel booked before it on its berth and never into a gap that would
+     * delay a booking; a move gives it a new requested arrival, which it
+     * accepts again. Refused for a vessel alongside or already at anchor.
+     */
+    @Transactional
+    public void anchor(VesselVisit visit, Instant at) {
+        List<Berth> berths = lockBerths();
+        String vessel = visit.getVessel().getCode();
+        if (visit.getAtaBerth() != null) {
+            throw new VisitConflictException("Vessel " + vessel + " is alongside; it cannot be at the anchorage");
+        }
+        if (visit.atAnchorage()) {
+            throw new VisitConflictException("Vessel " + vessel + " has been at the anchorage since "
+                    + visit.getAtaAnchorage() + "; it reports leaving it first");
+        }
+        visit.setAtaAnchorage(at);
+        visit.setAtdAnchorage(null);
+        visit.setPhase(VisitPhase.ARRIVED);
+        eventRepository.save(VisitEvent.of(visit, Milestone.ANCHORAGE_START, TimeClassifier.ACTUAL,
+                at, Instant.now(), EventSource.VESSEL, null));
+        Notes notes = Notes.none();
+        notes.byVisit().put(visit.getId(), "At the anchorage since " + at + ", ready to come in");
+        replan(berths, notes, null);
+    }
+
+    /**
+     * The vessel reports it has left the anchorage, on its way to its berth.
+     * The plan does not change: it was taken to be ready from the anchorage
+     * already. Refused for a vessel not at anchor, and for a time before it
+     * anchored.
+     */
+    @Transactional
+    public void leaveAnchorage(VesselVisit visit, Instant at) {
+        String vessel = visit.getVessel().getCode();
+        if (!visit.atAnchorage()) {
+            throw new VisitConflictException("Vessel " + vessel + " is not at the anchorage");
+        }
+        if (at.isBefore(visit.getAtaAnchorage())) {
+            throw new IllegalArgumentException("Leaving the anchorage (" + at + ") is before arriving there ("
+                    + visit.getAtaAnchorage() + ")");
+        }
+        visit.setAtdAnchorage(at);
+        eventRepository.save(VisitEvent.of(visit, Milestone.ANCHORAGE_COMPLETE, TimeClassifier.ACTUAL,
+                at, Instant.now(), EventSource.VESSEL, null));
     }
 
     /** Close the allocation and the visit at the given time, record who said so, and replan. */
@@ -484,7 +538,7 @@ public class BerthService {
                        Map<Long, List<BerthAllocation>> booked, Map<Long, List<BerthMaintenance>> maintenance,
                        Notes notes, Instant now) {
         Instant horizon = now.plus(bookingHorizon);
-        for (Slot slot : plan(line, berths, lines, maintenance, lateTolerance, turnaround)) {
+        for (Slot slot : plan(line, berths, lines, maintenance, lateTolerance, turnaround, passage)) {
             VesselVisit visit = slot.visit();
             if (slot.start().isAfter(horizon)) {
                 String why = "A berth is given within " + span(bookingHorizon) + " of arrival";
@@ -517,7 +571,7 @@ public class BerthService {
             for (BerthAllocation booking : booked.get(berth.getId())) {
                 VesselVisit visit = booking.getVisit();
                 Duration stay = stay(visit);
-                Instant start = earliestStart(windows, later(free, visit.getEtaBerth()), stay);
+                Instant start = earliestStart(windows, later(free, readyAt(visit, passage)), stay);
                 booking.setPlannedStart(start);
                 booking.setPlannedEnd(start.plus(stay));
                 free = start.plus(stay).plus(turnaround);
@@ -584,7 +638,7 @@ public class BerthService {
             }
         }
         Instant from = free;
-        Function<VesselVisit, Instant> startHere = v -> earliestStart(windows, later(from, v.getEtaBerth()), stay(v));
+        Function<VesselVisit, Instant> startHere = v -> earliestStart(windows, later(from, readyAt(v, passage)), stay(v));
         Map<Long, Instant> startOf = new HashMap<>();
         startOf.put(late.getId(), startHere.apply(late));
         booked.forEach((berthId, bookings) -> bookings.forEach(other -> {
@@ -644,7 +698,7 @@ public class BerthService {
                         }
                         Line line = lines.get(other.getId());
                         Instant at = earliestGap(line, maintenance.getOrDefault(other.getId(), List.of()),
-                                later(line.from, visit.getEtaBerth()), stay(visit), turnaround);
+                                later(line.from, readyAt(visit, passage)), stay(visit), turnaround);
                         if (at.plus(lateTolerance).isBefore(booking.getPlannedStart())
                                 && (bestStart == null || at.isBefore(bestStart))) {
                             best = other;
@@ -698,7 +752,7 @@ public class BerthService {
      */
     static List<Slot> plan(List<VesselVisit> line, List<Berth> berths, Map<Long, Line> lines,
                            Map<Long, List<BerthMaintenance>> maintenance, Duration tolerance,
-                           Duration turnaround) {
+                           Duration turnaround, Duration passage) {
         List<VesselVisit> waiting = new ArrayList<>(line);
         Map<Long, Line> plan = new HashMap<>();
         lines.forEach((id, berthLine) -> plan.put(id, berthLine.copy()));
@@ -709,7 +763,7 @@ public class BerthService {
             for (Berth candidate : berths) {
                 for (VesselVisit visit : waiting) {
                     if (BerthFit.fits(candidate, visit)) {
-                        Instant start = startOn(candidate, visit, plan, maintenance, turnaround);
+                        Instant start = startOn(candidate, visit, plan, maintenance, turnaround, passage);
                         if (soonest == null || start.isBefore(soonest)) {
                             soonest = start;
                             berth = candidate;
@@ -725,13 +779,13 @@ public class BerthService {
             Instant limit = soonest.plus(tolerance);
             VesselVisit chosen = waiting.stream()
                     .filter(v -> BerthFit.fits(first, v)
-                            && !startOn(first, v, plan, maintenance, turnaround).isAfter(limit))
+                            && !startOn(first, v, plan, maintenance, turnaround, passage).isAfter(limit))
                     .findFirst().orElseThrow();
             Berth best = berth;
-            Instant start = startOn(berth, chosen, plan, maintenance, turnaround);
+            Instant start = startOn(berth, chosen, plan, maintenance, turnaround, passage);
             for (Berth candidate : berths) {
                 if (BerthFit.fits(candidate, chosen)) {
-                    Instant at = startOn(candidate, chosen, plan, maintenance, turnaround);
+                    Instant at = startOn(candidate, chosen, plan, maintenance, turnaround, passage);
                     // on a tie, the berth where the vessel before leaves first: it has the most time in hand
                     if (at.isBefore(start) || (at.equals(start)
                             && freeBefore(plan.get(candidate.getId()), at)
@@ -750,10 +804,24 @@ public class BerthService {
     }
 
     private static Instant startOn(Berth berth, VesselVisit visit, Map<Long, Line> lines,
-                                   Map<Long, List<BerthMaintenance>> maintenance, Duration turnaround) {
+                                   Map<Long, List<BerthMaintenance>> maintenance, Duration turnaround,
+                                   Duration passage) {
         Line line = lines.get(berth.getId());
         return earliestGap(line, maintenance.getOrDefault(berth.getId(), List.of()),
-                later(line.from, visit.getEtaBerth()), stay(visit), turnaround);
+                later(line.from, readyAt(visit, passage)), stay(visit), turnaround);
+    }
+
+    /**
+     * When the vessel can be at the berth: its estimate, or, for a vessel
+     * that has anchored to wait and is not yet alongside, one passage from the
+     * anchorage after it anchored. It is already here, so its estimate no
+     * longer says when it can come.
+     */
+    static Instant readyAt(VesselVisit visit, Duration passage) {
+        if (visit.getAtaAnchorage() != null && visit.getAtaBerth() == null) {
+            return visit.getAtaAnchorage().plus(passage);
+        }
+        return visit.getEtaBerth();
     }
 
     /**

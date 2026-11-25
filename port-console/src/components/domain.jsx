@@ -1,8 +1,8 @@
-import { Anchor, Ban, CircleCheck, Clock, Hourglass, LogOut, MapPin, TriangleAlert } from 'lucide-react'
+import { Anchor, Ban, CircleCheck, Clock, Hourglass, LogOut, MapPin, Ship, TriangleAlert } from 'lucide-react'
 import { useTime } from '@/app/providers'
 import { cn } from '@/lib/cn'
 import { dayClock, fullTime, relative, span, toMillis } from '@/lib/time'
-import { AGREEMENT, agreementOf, answerOverdueMs, cancelledByTerminal, ordinal, STANDING, standingOf, TIME_CLASSES } from '@/lib/visit'
+import { AGREEMENT, agreementOf, answerOverdueMs, atAnchorage, cancelledByTerminal, ordinal, STANDING, standingOf, TIME_CLASSES } from '@/lib/visit'
 
 /** The pieces that show port-call facts the same way on every screen. */
 
@@ -78,8 +78,24 @@ export function Chip({ icon: Icon, tone = 'neutral', children, className }) {
   )
 }
 
-/** Where a visit stands: alongside, holding a berth it has not reached, waiting, or over. */
+/**
+ * Where a visit stands: alongside, holding a berth it has not reached, waiting,
+ * or over; and, for a ship that has anchored to wait, how long it has lain at
+ * the anchorage.
+ */
 export function StandingChip({ visit }) {
+  const { now } = useTime()
+  const chip = standingChip(visit)
+  if (!atAnchorage(visit)) return chip
+  return (
+    <>
+      {chip}
+      <Chip icon={Ship} tone="accent">At the anchorage, {span(toMillis(now) - toMillis(visit.ataAnchorage))}</Chip>
+    </>
+  )
+}
+
+function standingChip(visit) {
   const standing = standingOf(visit)
   if (standing === STANDING.ALONGSIDE) return <Chip icon={Anchor} tone="good">Alongside {visit.berth.berthCode}</Chip>
   if (standing === STANDING.RESERVED) return <Chip icon={MapPin} tone="accent">{visit.berth.berthCode} reserved</Chip>

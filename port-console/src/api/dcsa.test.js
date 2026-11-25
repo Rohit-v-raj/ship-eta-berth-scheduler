@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/test/msw/server'
-import { actualDeparture, DcsaFeedbackError, estimatedArrival, getEvents, omittedCall, plannedArrival, sendEvents } from './dcsa'
+import { actualDeparture, anchorageArrival, DcsaFeedbackError, estimatedArrival, getEvents, omittedCall, plannedArrival, sendEvents } from './dcsa'
 
 const time = '2026-10-13T14:00:00.123456Z'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -65,6 +65,16 @@ describe('DCSA event builders', () => {
     expect(second.eventID).not.toBe(first.eventID)
     expect(Date.parse(first.eventUpdatedDateTime)).toBeGreaterThanOrEqual(before)
     expect(omittedCall('SOLVIK', 'NOFRO').eventID).toMatch(UUID)
+  })
+
+  it('build an arrival at the anchorage: the anchorage service started, at an actual time', () => {
+    expect(anchorageArrival('SOLVIK', time)).toEqual({
+      eventID: expect.stringMatching(UUID),
+      eventUpdatedDateTime: expect.any(String),
+      vessel: { vesselName: 'SOLVIK' },
+      portCallService: { portCallServiceTypeCode: 'ANCHORAGE', portCallServiceEventTypeCode: 'STRT', facilityTypeCode: 'ANCH' },
+      timestamp: { classifierCode: 'ACT', serviceDateTime: new Date(time).toISOString() },
+    })
   })
 
   it('build an omitted port call with no timestamp', () => {

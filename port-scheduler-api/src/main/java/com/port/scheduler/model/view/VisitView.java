@@ -27,6 +27,10 @@ public record VisitView(
         Instant ptaBerth,
         Instant ataBerth,
         Instant atdBerth,
+        /** When the vessel anchored to wait for its berth; null if it has not. */
+        Instant ataAnchorage,
+        /** When it left the anchorage; null while it lies there, or if it never anchored. */
+        Instant atdAnchorage,
         Integer plannedServiceMinutes,
         /** Where the vessel last said it was; null if its estimates have carried no position. */
         PositionReport lastReport,

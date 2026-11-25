@@ -211,6 +211,8 @@ public class PortViewService {
         Terminal terminal = visit.getTerminal();
         boolean open = !VisitPhase.CLOSED.contains(visit.getPhase());
         boolean underWay = open && visit.getAtaBerth() == null;
+        // a vessel that has anchored is here: it owes no more estimates, though its draft is still due
+        boolean estimating = underWay && visit.getAtaAnchorage() == null;
         // a visit in progress shows only the berth it holds; one whose booking was withdrawn is waiting again
         if (open && allocation != null && !AllocationStatus.OPEN.contains(allocation.getStatus())) {
             allocation = null;
@@ -236,14 +238,15 @@ public class PortViewService {
                 queueIndex < 0 ? null : queueIndex + 1,
                 visit.getEtaBerth(), visit.getRtaBerth(), visit.getPtaBerth(),
                 visit.getAtaBerth(), visit.getAtdBerth(),
+                visit.getAtaAnchorage(), visit.getAtdAnchorage(),
                 visit.getPlannedServiceMinutes(),
                 report == null ? null : toReport(report),
                 requestedAt,
                 awaitingAnswer ? requestedAt.plus(answerWindow) : null,
                 visit.getCancelledBy(),
                 visit.getRemarks(),
-                underWay ? PlanningRules.estimateDueSince(arrival, estimatedAt, now, estimateMilestones) : null,
-                underWay ? PlanningRules.nextEstimateBy(arrival, now, estimateMilestones) : null,
+                estimating ? PlanningRules.estimateDueSince(arrival, estimatedAt, now, estimateMilestones) : null,
+                estimating ? PlanningRules.nextEstimateBy(arrival, now, estimateMilestones) : null,
                 booked && agreed != null && agreed.isBefore(now) ? agreed : null,
                 visit.getArrivalDraftMeters(),
                 alongside && allocation.getPlannedEnd().isBefore(now) ? allocation.getPlannedEnd() : null,

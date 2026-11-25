@@ -186,6 +186,20 @@ public class VesselVisitService {
         berthService.depart(openVisit(vesselId), at);
     }
 
+    /** The vessel reports it has anchored to wait for its berth, at the time it gives. */
+    @Transactional
+    public void anchored(String vesselId, Instant at) {
+        notInTheFuture(at, "An arrival at the anchorage");
+        berthService.anchor(openVisit(vesselId), at);
+    }
+
+    /** The vessel reports it has left the anchorage, at the time it gives. */
+    @Transactional
+    public void leftAnchorage(String vesselId, Instant at) {
+        notInTheFuture(at, "A departure from the anchorage");
+        berthService.leaveAnchorage(openVisit(vesselId), at);
+    }
+
     /**
      * Refuse an estimate that would open a call for a vessel whose length
      * overall and beam the terminal does not hold, neither in the estimate nor

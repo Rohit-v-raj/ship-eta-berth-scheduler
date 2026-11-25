@@ -91,7 +91,7 @@ class PortCallEventsControllerTest {
     @Test
     void eventsSentToTheTerminalAreAnsweredWithFeedbackPerEvent() throws Exception {
         given(receiver.receive(any())).willReturn(
-                List.of(new FeedbackElement("WARN", "Not processed: this terminal acts on BERTH events only", "$.events[0]")));
+                List.of(new FeedbackElement("WARN", "Not processed: this terminal acts on BERTH and ANCHORAGE events only", "$.events[0]")));
 
         mvc.perform(post("/api/port-call/v2/events").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"events\":[{\"vessel\":{\"vesselIMONumber\":\"9321483\"},\"isFYI\":false,"
