@@ -932,8 +932,6 @@ any tool is allowed to change state.
 
 Closest first:
 
-- **Fix the ETA label** — the model's training target counts time spent stopped
-  near the berth as sailing, so its estimates run late close to port.
 - **Let time itself change the plan** — ships' times are worked out
   again when something happens, not when time passes. A ship that overstays
   is flagged on read, but the ships behind it are re-timed only at the next

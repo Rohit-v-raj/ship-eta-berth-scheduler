@@ -279,7 +279,7 @@ erDiagram
 <h2 id="status">7. Progress</h2>
 <div class="box"><table>
 <tr><th>Area</th><th>State</th><th>Notes</th></tr>
-<tr><td>ETA model and its service</td><td class="ok">Working</td><td>XGBoost, 69 min mean error on unseen vessels. Its label counts idle time near the berth as sailing, which makes it pessimistic close to port.</td></tr>
+<tr><td>ETA model and its service</td><td class="ok">Working</td><td>XGBoost, 36 min mean error on unseen vessels against the time the ship stops at its berth; 7 min in the last half hour. It predicts sailing time, so for a ship that will still wait on its way it is early.</td></tr>
 <tr><td>Persistence and data model</td><td class="ok">Working</td><td>11 tables, state survives a restart.</td></tr>
 <tr><td>Berth plan</td><td class="ok">Working</td><td>Each berth holds a sequence of bookings across the week; a ship due soon uses the gap before a booking without delaying it. A booking moves to a berth that can take it more than 4 hours sooner. A ship comes alongside at its turn: an early ship never delays one booked ahead of it. A ship that anchors early is brought in as soon as that delays no one. Ships due beyond 7 days wait in a queue with no berth. Times are worked out again whenever the plan changes.</td></tr>
 <tr><td>Berth fit and maintenance</td><td class="ok">Working</td><td>A ship's length and beam are required once, with its first estimate; its draft per call is due a day before arrival. A ship is given only a berth its length, beam and draft fit, and refused if it fits none. Maintenance windows are recorded in advance and planned around.</td></tr>

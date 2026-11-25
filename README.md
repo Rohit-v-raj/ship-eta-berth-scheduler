@@ -61,17 +61,23 @@ than in the study's shortest case.
 ## Results
 
 Trained on **~30M AIS position reports** (Norwegian west coast, Jul–Oct 2020)
-→ 688 labelled port-approach voyages, evaluated on **held-out vessels** the
-model has never seen:
+→ 698 labelled port-approach voyages, evaluated on **held-out vessels** the
+model has never seen. The model predicts the minutes until the ship **stops at
+its berth**, read from its speed reports, and every figure below is measured
+against that:
 
 | Model | Test MAE | Notes |
 |---|---|---|
-| Naive physics prior (distance ÷ speed) | 161.5 min | the baseline to beat |
-| **XGBoost** (production model) | **69 min** (R² 0.62) | **57% better than naive** |
-| Bi-GRU (PyTorch, 12-step sequences) | 74.9 min | built, measured, lost — see below |
+| Naive physics prior (distance ÷ speed) | 134.6 min | the baseline to beat |
+| **XGBoost** (production model since November 2026) | **36.0 min** (R² 0.77) | 7.4 min in the last half hour before the stop |
+| XGBoost before November 2026 | 76.2 min | same test pings and truth; trained to the "moored" status (it scored 69 against that label) |
+| Bi-GRU (PyTorch, 12-step sequences) | 74.9 min | earlier label; built, measured, lost — see below |
 
-The naive baseline does badly on slow or stationary pings, which are a quarter
-of the data. On moving pings alone the gain over it is 18% (67.1 vs 82.3 min).
+One test split of 36 vessels is a small sample, so the recipes were also
+compared by **5-fold cross-validation by vessel**: 64.4 min against 105.5 for
+the previous recipe on every ping, and 32.9 against 85.1 on the final leg (the
+sailing after any stop of 30+ minutes part-way, which is what a snapshot model
+can know).
 
 ## What the scheduler does
 
@@ -220,9 +226,13 @@ Four controllers, one per flow.
   paper we analyzed) leaks near-duplicate 3-second pings across the split and
   inflates every metric.
 - **Honest negative results.** A Bi-GRU was built and lost
-  fairly to XGBoost (74.9 vs 68.4 min on identical test points) — 688 voyages
-  is too little data for a deep model, so the tree model ships
-  (`docs/bigru-explained.md`). Vessel `length` and time-of-day/season features
+  fairly to XGBoost (74.9 vs 68.4 min on identical test points, under the
+  earlier label) — 688 voyages is too little data for a deep model, so the tree
+  model ships (`docs/bigru-explained.md`). In November 2026 the label, the
+  training rows, the objective and the features were re-tested one change at a
+  time by 5-fold cross-validation by vessel; the arrival label changed, and
+  joining voyages across midnight, a 0.27-knot stop threshold, a log target and
+  a random forest were tried and rejected. Vessel `length` and time-of-day/season features
   from published papers were tested via seeded ablations and rejected when
   they didn't improve held-out error (the time-of-day/season ablation is
   `scratch/ablate_tid.py`).
@@ -241,10 +251,15 @@ Four controllers, one per flow.
 
 ## Known limits
 
-- **The ETA label includes idle time.** Arrival is taken as the moment the crew
-  sets the status to "moored", which is well after the ship has stopped: in the
-  last 30 minutes before it, 71% of position reports are under 5 knots. The
-  model therefore predicts late when a ship is close to port.
+- **The model predicts sailing, not waiting.** It learns from the sailing
+  after any stop of 30+ minutes part-way, so for a ship that will still anchor
+  or wait on its way it is early: more than four hours from the stop it is
+  76 minutes early on average on the test vessels. Waiting is the berth plan's
+  business; the terminal tells the ship when to come.
+- **Arrival is read from speed.** It is the last report at 1 knot or more
+  before the ship settles within 0.5 nm of its berth; the moored status, set a
+  median 13 minutes later, only marks the call. For 6% of voyages no such stop
+  shows, and the moored time is used.
 - **No emissions figure.** The calculator advises a speed but does not estimate
   the fuel or CO2 saved. That needs a fuel curve for each ship, which the data
   does not have.
@@ -346,8 +361,9 @@ The raw AIS data (~30M rows, 40 daily Parquet files, Norwegian west coast,
 2020-07-27 → 2020-10-21) is **not included** in the repo due to size. The
 pipeline expects it in `data/parquets/`; any AIS dump with the standard fields
 (`mmsi, date_time_utc, lat, lon, sog, cog, nav_status, length…`) works. The
-ETA target is derived from `nav_status == 5` (moored) arrival events —
-no manual labelling.
+calls are found from `nav_status == 5` (moored) events, and the ETA target is
+the time until the ship stops at that berth, read from its speed reports — no
+manual labelling.
 
 ## Documentation
 

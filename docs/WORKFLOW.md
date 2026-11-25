@@ -18,7 +18,7 @@
 ```
  PHASE 0  Setup        ─►  Python venv + JDK 21 + MySQL + secrets file ready
  PHASE 1  Data         ─►  raw AIS parquet  →  feature_engineer.py  →  voyage_features.parquet
- PHASE 2  Train        ─►  train.py  →  models/eta_xgb.pkl   (test MAE ~69 min)
+ PHASE 2  Train        ─►  train.py  →  models/eta_xgb.pkl   (test MAE ~36 min)
  PHASE 3  Serve model  ─►  predict_api.py (FastAPI)  on :8000
  PHASE 4  Serve API    ─►  port-scheduler-api (Spring Boot)  on :8080
  PHASE 5  Test live    ─►  curl the full chain  →  ETA, then the berth conversation
@@ -123,16 +123,21 @@ Turn the raw AIS parquet files into the labelled voyage dataset the model trains
 ..\port_ml_env\Scripts\python src\feature_engineer.py --n-files -1
 ```
 
-**What it does:** loads raw AIS → cleans sentinels → detects arrivals
-(`nav_status==5` **plus** real displacement) → builds per-voyage sequences with
-destination-conditioned features → splits **by vessel** (no leakage) → writes:
+**What it does:** loads raw AIS → cleans sentinels → finds calls
+(`nav_status==5` **plus** real displacement) → labels every ping with the
+minutes until the ship stops at its berth (the moored status is often set
+later), reading the days before and after so a call across midnight is seen
+whole → builds per-voyage sequences with destination-conditioned features →
+splits **by vessel** (no leakage) → writes:
 
 | Output file | Contents |
 |---|---|
 | `data/processed/voyage_features.parquet` | the labelled training rows |
 | `data/processed/voyages_meta.parquet` | per-voyage metadata |
 
-**Confirm it worked:** the full run reports roughly **688 voyages / 202k points**.
+**Confirm it worked:** the full run takes about five minutes and reports
+**698 voyages / 207,618 points**, the moored status a median 12.6 minutes after
+the stop.
 Both parquet files should now exist in `data/processed/`.
 
 > ⚠️ This is a prerequisite for training. If `data/processed/` is empty, `train.py`
@@ -148,14 +153,19 @@ Both parquet files should now exist in `data/processed/`.
 ..\port_ml_env\Scripts\python src\train.py
 ```
 
-**What it does:** loads `data/processed/`, trains XGBoost on the by-vessel split,
-prints metrics, and saves the model bundle.
+**What it does:** loads `data/processed/`, trains XGBoost on the by-vessel split
+(leaving out the pings before a stop of 30+ minutes part-way, whose time
+includes a wait), prints metrics, and saves the model bundle. It also scores
+the previous model, if `models/eta_xgb_prev.pkl` exists, on the same test
+pings, and runs a 5-fold cross-validation by vessel of the current and the
+previous recipe.
 
 | Output | Value |
 |---|---|
 | `models/eta_xgb.pkl` | the trained model `{"model", "features", "target"}` |
-| Test **MAE** | ~**69 minutes** (on unseen vessels) |
-| Test **R²** | ~**0.62** |
+| Test **MAE** | ~**36 minutes** to the stop (on unseen vessels); ~24 on the final leg |
+| Test **R²** | ~**0.77** |
+| 5-fold by vessel | ~**64 minutes** on every ping, ~**33** on the final leg (previous recipe: ~105 and ~85) |
 
 **Confirm it worked:** the console prints MAE / RMSE / R² **and an error-by-horizon
 table** (error broken down by how far the ship is from arrival), and
@@ -168,8 +178,9 @@ Phase 3 — **training must succeed before serving.**
 ..\port_ml_env\Scripts\python src\train_bigru.py
 ```
 This builds the PyTorch Bi-GRU and runs a **fair head-to-head** (re-scores XGBoost
-on the same window-end points). Expected result: **Bi-GRU ~74.9 min vs XGBoost
-~68.4 min** — XGBoost wins on this dataset. Saves `models/eta_bigru.pt`. This is a
+on the same window-end points). Last measured, under the earlier label (time to
+the moored status): **Bi-GRU ~74.9 min vs XGBoost ~68.4 min** — XGBoost won.
+It has not been rerun on the current label (it needs PyTorch). Saves `models/eta_bigru.pt`. This is a
 documented experiment, **not** part of the production path.
 
 ### 2.3 (Optional) Run the tests

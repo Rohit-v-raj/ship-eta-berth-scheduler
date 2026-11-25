@@ -335,6 +335,11 @@ window-end test points:
    Bi-GRU           :  74.9 min average error
 ```
 
+Both figures are under the earlier label, the time until the "moored" status.
+In November 2026 the XGBoost model was retrained to the time the ship stops at
+its berth (`xgboost-explained.md`, section 11); the Bi-GRU has not been retrained
+(it needs PyTorch), so these two numbers are the last fair comparison.
+
 The Bi-GRU **did not beat** the simple baseline. The reason is about data, not the
 window design:
 

@@ -2,20 +2,34 @@
 
 Pipeline (Phase 1, steps 3-6 of ROADMAP.md):
 
-1. **Define arrival** - a ``nav_status == 5`` (moored) segment that the vessel
+1. **Find the calls** - a ``nav_status == 5`` (moored) segment that the vessel
    reached *after travelling a meaningful distance*. This filters out the
    "parked overnight" loiterers (see ``reports/sample_voyage.xlsx``) whose
    mooring point equals their origin.
-2. **Extract the approach voyage** before each arrival and label every ping with
-   ``minutes_to_arrival`` (the ETA target).
-3. **Destination-conditioned features** - the berth/port is known, so we add
+2. **Define arrival as the moment the ship stops** - the last ping at
+   ``STOP_KN`` or more before the ship settles (stays below ``STOP_KN`` for
+   ``SETTLE_MINUTES`` within ``SETTLE_NM`` of the berth). The moored status is
+   often set minutes or hours after the ship stopped (median 13 min), and now
+   and then while it still moves, so the time it was set is kept only for
+   comparison, as ``minutes_to_moored`` (experiments of 2026-11-25).
+3. **Extract the approach voyage** before each call and label every ping with
+   ``minutes_to_arrival`` (the ETA target: minutes to the stop, 0 after it).
+   Pings before a stop of ``LONG_STOP_MINUTES`` or more part-way are flagged
+   ``before_last_long_stop``: their time to go includes a wait, which is the
+   berth plan's business, not the sailing the model predicts.
+4. **Destination-conditioned features** - the berth/port is known, so we add
    ``distance_to_dest_nm`` and ``bearing_to_dest_deg``. Plus TID/TIY one-hots
    (time-of-day / season, per Abdi & Amrit 2024).
-4. **Resample** each voyage to a fixed time step so sequences are uniform, and
+5. **Resample** each voyage to a fixed time step so sequences are uniform, and
    keep BOTH targets: ``minutes_to_arrival`` (ETA) and ``next_lat/next_lon``
    (trajectory bonus head).
-5. **Split by vessel** (not random rows) so a voyage never leaks across
+6. **Split by vessel** (not random rows) so a voyage never leaks across
    train/val/test.
+
+Each file is one UTC day. The days before and after a file, when the data has
+them, are read with it, so a call that starts late in the evening and the stop
+before a call just after midnight are seen whole; the rows themselves come only
+from the arrival day.
 
 Outputs (written to ``data/processed/``):
     voyage_features.parquet   one row per resampled ping
@@ -46,6 +60,12 @@ MIN_TRANSIT_SOG = 3.0       # voyage must show real movement (knots)
 MAX_LOOKBACK_HOURS = 24.0   # cap how far back an approach extends
 RESAMPLE = "60s"            # fixed step for the sequences
 EARTH_NM = 3440.065         # earth radius in nautical miles
+
+# arrival: when the ship stops (tested against 0.27 kn, the thesis threshold: 3 min later on the median, scored worse)
+STOP_KN = 1.0               # moving at or above this speed
+SETTLE_NM = 0.5             # settled within this distance of the berth ...
+SETTLE_MINUTES = 10         # ... below STOP_KN for this long
+LONG_STOP_MINUTES = 30      # a stop part-way of this length or more is a wait, not sailing
 
 
 # --- geometry helpers -------------------------------------------------------
@@ -116,22 +136,60 @@ def _mooring_events(track: pd.DataFrame) -> list[dict]:
     return events
 
 
-def extract_voyages(df: pd.DataFrame, day: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Extract all valid labelled approach voyages from one day's pings."""
-    df = dl.clean_ais(df)
+def _physical_arrival(t: np.ndarray, sog: np.ndarray, dist: np.ndarray, start: int, stop: int) -> int | None:
+    """Index of the last ping at STOP_KN or more before the ship settles near the berth, among pings
+    [start, stop); None if it never settles there. Settled: below STOP_KN within SETTLE_NM of the berth,
+    with no ping at STOP_KN or more for SETTLE_MINUTES after."""
+    moving = np.where(np.nan_to_num(sog[start:stop], nan=-1.0) >= STOP_KN)[0] + start
+    candidates = np.where((sog[start:stop] < STOP_KN) & (dist[start:stop] <= SETTLE_NM))[0] + start
+    settle = np.timedelta64(SETTLE_MINUTES, "m")
+    for c in candidates:
+        k = np.searchsorted(moving, c, side="right")
+        if k == len(moving) or t[moving[k]] - t[c] >= settle:
+            return int(moving[k - 1]) if k > 0 else start
+    return None
+
+
+def _last_long_stop_end(t: np.ndarray, sog: np.ndarray, start: int, stop: int):
+    """When the ship moved off after its last stop of LONG_STOP_MINUTES or more among pings [start, stop);
+    None if it made no such stop."""
+    moving = np.where(np.nan_to_num(sog[start:stop], nan=-1.0) >= STOP_KN)[0] + start
+    if len(moving) < 2:
+        return None
+    long_gaps = np.where(t[moving[1:]] - t[moving[:-1]] >= np.timedelta64(LONG_STOP_MINUTES, "m"))[0]
+    return pd.Timestamp(t[moving[long_gaps[-1] + 1]]) if len(long_gaps) else None
+
+
+def extract_voyages(df: pd.DataFrame, day: str,
+                    arrival_file: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Extract all valid labelled approach voyages arriving on one day.
+
+    ``df`` may hold the neighbouring days' pings too, with a ``file_idx`` column:
+    then only calls whose moored status starts in file ``arrival_file`` are taken,
+    and only that file's pings become rows. Pings must already be cleaned
+    (:func:`data_loader.clean_ais`).
+    """
     point_frames, meta_rows = [], []
 
     for mmsi, track in df.groupby("mmsi"):
         track = track.sort_values("date_time_utc").reset_index(drop=True)
+        t = track["date_time_utc"].values
+        sog = pd.to_numeric(track["sog"], errors="coerce").to_numpy(dtype=float)
+        lat, lon = track["lat"].to_numpy(dtype=float), track["lon"].to_numpy(dtype=float)
+        file_idx = track["file_idx"].to_numpy() if arrival_file is not None else None
         events = _mooring_events(track)
         prev_end = track["date_time_utc"].iloc[0]
 
-        for i, ev in enumerate(events):
+        for ev in events:
             lookback = ev["arrival_time"] - pd.Timedelta(hours=MAX_LOOKBACK_HOURS)
             start = max(prev_end, lookback)
+            prev_end = ev["end_time"]
+            if file_idx is not None and file_idx[np.searchsorted(t, np.datetime64(ev["arrival_time"]))] != arrival_file:
+                continue  # a call arriving on a neighbouring day is that day's
             approach = track[(track["date_time_utc"] >= start)
                              & (track["date_time_utc"] < ev["arrival_time"])]
-            prev_end = ev["end_time"]
+            if file_idx is not None:
+                approach = approach[approach["file_idx"] == arrival_file]
 
             if len(approach) < MIN_VOYAGE_POINTS:
                 continue
@@ -144,7 +202,16 @@ def extract_voyages(df: pd.DataFrame, day: str) -> tuple[pd.DataFrame, pd.DataFr
             if not (approach["sog"].fillna(0) > MIN_TRANSIT_SOG).any():
                 continue
 
-            seq = _resample_voyage(approach, ev, day, int(mmsi), i)
+            # the stop: searched from the approach start to the end of the moored status
+            i0 = int(np.searchsorted(t, np.datetime64(start)))
+            i1 = int(np.searchsorted(t, np.datetime64(ev["end_time"]), side="right"))
+            dist = haversine_nm(lat, lon, ev["dest_lat"], ev["dest_lon"])
+            stop_idx = _physical_arrival(t, sog, dist, i0, i1)
+            stopped_at = pd.Timestamp(t[stop_idx]) if stop_idx is not None else ev["arrival_time"]
+            stop_end = int(np.searchsorted(t, np.datetime64(stopped_at), side="right"))
+            ev = ev | {"stopped_at": stopped_at, "long_stop_end": _last_long_stop_end(t, sog, i0, stop_end)}
+
+            seq = _resample_voyage(approach, ev, day, int(mmsi))
             if len(seq) < MIN_VOYAGE_POINTS:
                 continue
             point_frames.append(seq)
@@ -158,6 +225,11 @@ def extract_voyages(df: pd.DataFrame, day: str) -> tuple[pd.DataFrame, pd.DataFr
                 "voyage_minutes": round(float(seq["minutes_to_arrival"].max()), 1),
                 "dest_lat": ev["dest_lat"],
                 "dest_lon": ev["dest_lon"],
+                "moored_at": ev["arrival_time"],
+                "stopped_at": stopped_at,
+                "stop_found": stop_idx is not None,
+                "idle_minutes": round((ev["arrival_time"] - stopped_at).total_seconds() / 60, 1),
+                "long_stop": ev["long_stop_end"] is not None,
             })
 
     points = pd.concat(point_frames, ignore_index=True) if point_frames else pd.DataFrame()
@@ -165,8 +237,7 @@ def extract_voyages(df: pd.DataFrame, day: str) -> tuple[pd.DataFrame, pd.DataFr
     return points, meta
 
 
-def _resample_voyage(approach: pd.DataFrame, ev: dict, day: str,
-                     mmsi: int, idx: int) -> pd.DataFrame:
+def _resample_voyage(approach: pd.DataFrame, ev: dict, day: str, mmsi: int) -> pd.DataFrame:
     """Resample one approach to a fixed step and compute features + targets."""
     cols = ["lat", "lon", "sog", "cog"]
     seg = (approach.set_index("date_time_utc")[cols]
@@ -175,8 +246,12 @@ def _resample_voyage(approach: pd.DataFrame, ev: dict, day: str,
         return seg.reset_index()
 
     seg = seg.reset_index()
-    t_arr = ev["arrival_time"]
-    seg["minutes_to_arrival"] = (t_arr - seg["date_time_utc"]).dt.total_seconds() / 60
+    to_stop = (ev["stopped_at"] - seg["date_time_utc"]).dt.total_seconds() / 60
+    seg["minutes_to_arrival"] = to_stop.clip(lower=0)
+    seg["after_stop"] = to_stop <= 0
+    seg["minutes_to_moored"] = (ev["arrival_time"] - seg["date_time_utc"]).dt.total_seconds() / 60
+    seg["before_last_long_stop"] = (seg["date_time_utc"] < ev["long_stop_end"]
+                                    if ev["long_stop_end"] is not None else False)
 
     seg = add_time_features(seg)
 
@@ -194,26 +269,49 @@ def _resample_voyage(approach: pd.DataFrame, ev: dict, day: str,
     seg["next_lat"] = seg["lat"].shift(-1)
     seg["next_lon"] = seg["lon"].shift(-1)
 
-    seg.insert(0, "voyage_id", f"{day}_{mmsi}_{idx}")
+    seg.insert(0, "voyage_id", f"{day}_{mmsi}_{ev['arrival_time']:%H%M%S}")
     seg.insert(1, "mmsi", mmsi)
     seg["split"] = _split_for(mmsi)
     return seg
 
 
+def _load_day(path: Path, file_idx: int) -> pd.DataFrame:
+    df = dl.clean_ais(dl.load_file(path.name))
+    df["file_idx"] = file_idx
+    return df
+
+
 def build_dataset(n_files: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    files = dl.list_files()
+    files = sorted(dl.list_files(), key=lambda f: pd.read_parquet(f, columns=["date_time_utc"])
+                   ["date_time_utc"].iloc[0])
     if n_files is not None:
         files = files[:n_files]
 
+    loaded: dict[int, pd.DataFrame] = {}
+
+    def day_of(i: int) -> pd.Timestamp:
+        if i not in loaded:
+            loaded[i] = _load_day(files[i], i)
+        return pd.Timestamp(loaded[i]["date_time_utc"].iloc[0]).normalize()
+
     all_points, all_meta = [], []
-    for f in files:
-        df = dl.load_file(f.name)
-        day = str(df["date_time_utc"].dt.date.iloc[0])
-        points, meta = extract_voyages(df, day)
+    for i, f in enumerate(files):
+        for k in [k for k in loaded if k < i - 1]:
+            del loaded[k]
+        day = day_of(i)
+        parts = [loaded[i]]
+        # the neighbouring days, when the data has them: a call is seen whole across midnight
+        if i > 0 and day_of(i - 1) == day - pd.Timedelta(days=1):
+            parts.insert(0, loaded[i - 1])
+        if i + 1 < len(files) and day_of(i + 1) == day + pd.Timedelta(days=1):
+            parts.append(loaded[i + 1])
+        df = pd.concat(parts, ignore_index=True)
+        df = df[df["mmsi"].isin(loaded[i]["mmsi"].unique())]
+        points, meta = extract_voyages(df, str(day.date()), arrival_file=i)
         all_points.append(points)
         all_meta.append(meta)
         n_v = 0 if meta.empty else len(meta)
-        print(f"  {f.name}: {n_v} voyages, {len(points):,} points")
+        print(f"  {f.name} {day.date()}: {n_v} voyages, {len(points):,} points")
 
     points = pd.concat(all_points, ignore_index=True)
     meta = pd.concat(all_meta, ignore_index=True)
@@ -242,6 +340,9 @@ def main():
     print(meta["split"].value_counts())
     print(f"Median voyage length: {meta['voyage_minutes'].median():.0f} min, "
           f"median displacement: {meta['displacement_nm'].median():.1f} nm")
+    print(f"Moored status after the stop: median {meta['idle_minutes'].median():.1f} min; "
+          f"stop not found (moored time used): {int((~meta['stop_found']).sum())}; "
+          f"with a stop of {LONG_STOP_MINUTES}+ min part-way: {int(meta['long_stop'].sum())}")
     print(f"\nSaved:\n  {points_path}\n  {meta_path}")
 
 

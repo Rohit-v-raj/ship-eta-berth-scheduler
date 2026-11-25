@@ -76,8 +76,8 @@ Past AIS sequence [lat, lon, sog, cog, dist_to_dest, bearing_to_dest, ...]
 |------|-----------|
 | 1 | Load + clean AIS sentinels via `data_loader.clean_ais` ✅ |
 | 2 | EDA ✅ (`notebooks/01_eda.ipynb`) |
-| 3 | **Define arrival** = `nav_status==5` (moored) **AND** meaningful displacement from origin (filter out "parked overnight" loiterers — see `sample_voyage.xlsx`) |
-| 4 | **Destination-conditioned features:** the target berth/port is known, so add `distance_to_destination`, `bearing_to_destination` alongside `lat/lon/sog/cog` |
+| 3 | **Define arrival** = `nav_status==5` (moored) **AND** meaningful displacement from origin (filter out "parked overnight" loiterers — see `sample_voyage.xlsx`). **Revised November 2026:** the moored status finds the call; arrival is the moment the ship stops at the berth, read from its speed (the status is set a median 13 min later) |
+| 4 | **Destination-conditioned features:** the target berth/port is known, so add `distance_to_destination`, `bearing_to_destination` alongside `lat/lon/sog/cog`. **Revised November 2026:** `lat/lon` dropped (they memorised places), the on-course angle added |
 | 5 | Resample each voyage to a fixed step (~5s as in the paper); build sequence windows. Keep BOTH targets: `minutes_to_arrival` (ETA) and next-position (trajectory) |
 | 6 | **Split by vessel/voyage, NOT random rows** (random split leaks a voyage into train+test and inflates scores) |
 | 7 | **Baseline ETA:** `XGBoostRegressor` on tabular snapshot features — validates the whole pipeline fast |
