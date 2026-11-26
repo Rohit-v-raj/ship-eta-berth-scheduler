@@ -9,6 +9,8 @@ import com.port.scheduler.dcsa.PortCallMessages.FeedbackElement;
 import com.port.scheduler.dcsa.PortCallMessages.GetEventsError;
 import com.port.scheduler.dcsa.PortCallMessages.GetEventsResponse;
 import com.port.scheduler.dcsa.PortCallMessages.PostEventsResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -51,6 +53,8 @@ public class PortCallEventsController {
 
     static final String API_VERSION = "2.0.0";
 
+    private static final Logger log = LoggerFactory.getLogger(PortCallEventsController.class);
+
     static final TreeSet<String> SUPPORTED = new TreeSet<>(List.of(
             "UNLocationCode", "vesselIMONumber", "vesselMMSINumber", "vesselName", "portCallServiceTypeCode",
             "classifierCode", "eventTimestampMin", "eventTimestampMax", "limit", "cursor"));
@@ -88,7 +92,9 @@ public class PortCallEventsController {
             try {
                 event = json.treeToValue(events.get(i), Event.class);
             } catch (JacksonException e) {
-                feedback.add(unreadable(e, path));
+                FeedbackElement refused = unreadable(e, path);
+                log.info("DCSA event at {} refused: {}", refused.propertyPath(), refused.message());
+                feedback.add(refused);
                 continue;
             }
             receiver.receive(event, path).ifPresent(feedback::add);
@@ -164,6 +170,7 @@ public class PortCallEventsController {
     public ResponseEntity<GetEventsError> badRequest(Exception e) {
         String message = e instanceof HttpMessageNotReadableException
                 ? "The request body could not be read as a DCSA Port Call message" : e.getMessage();
+        log.info("DCSA request refused: {}", message);
         return ResponseEntity.badRequest()
                 .header("API-Version", API_VERSION)
                 .body(new GetEventsError(List.of(new FeedbackElement("ERROR", message, null))));

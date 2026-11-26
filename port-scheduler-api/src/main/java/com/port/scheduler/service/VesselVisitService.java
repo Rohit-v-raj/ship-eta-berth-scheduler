@@ -17,6 +17,8 @@ import com.port.scheduler.repository.EtaPredictionRepository;
 import com.port.scheduler.repository.VesselRepository;
 import com.port.scheduler.repository.VesselVisitRepository;
 import com.port.scheduler.repository.VisitEventRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,9 +38,14 @@ import java.util.UUID;
  * and stays open until the vessel departs, its operator omits the call, or
  * the terminal cancels it. A further estimate from the same vessel replans
  * that visit rather than opening a second one.
+ *
+ * What each call changes is logged at INFO; a refusal is logged where it is
+ * answered.
  */
 @Service
 public class VesselVisitService {
+
+    private static final Logger log = LoggerFactory.getLogger(VesselVisitService.class);
 
     private static final DateTimeFormatter REF_DATE =
             DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
@@ -133,6 +140,11 @@ public class VesselVisitService {
         visit.setPlannedServiceMinutes((int) PlanningRules.typicalStay(vessel.getType()).toMinutes());
         eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.ESTIMATED,
                 eta, now, EventSource.VESSEL, null));
+        if (open.isEmpty()) {
+            log.info("Opened {} for {}, estimated arrival {}", visit.getVisitRef(), vesselId, eta);
+        } else {
+            log.info("{} estimates arrival {}", BerthService.name(visit), eta);
+        }
         if (position != null) {
             predictionRepository.save(EtaPrediction.builder()
                     .visit(visit)
@@ -165,6 +177,7 @@ public class VesselVisitService {
         }
         if (!requested.equals(visit.getPtaBerth())) {
             visit.setPtaBerth(requested);
+            log.info("{} accepted the requested arrival {}", BerthService.name(visit), requested);
             // a booked vessel accepts a time at its berth; a waiting one accepts a time only
             eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.PLANNED,
                     requested, Instant.now(), EventSource.VESSEL, berthService.bookedBerth(visit)));
@@ -280,6 +293,7 @@ public class VesselVisitService {
         if (type != null) {
             vessel.setType(type);
         }
+        log.info("New vessel record {}", code);
         return vesselRepository.save(vessel).getCode();
     }
 
@@ -297,6 +311,7 @@ public class VesselVisitService {
         }
         visit.setCancelledBy(EventSource.VESSEL);
         visit.setRemarks("Omitted by the vessel operator");
+        log.info("{} omitted the call", BerthService.name(visit));
         berthService.cancel(visit);
     }
 
@@ -320,6 +335,7 @@ public class VesselVisitService {
         visit.setRemarks(reason == null || reason.isBlank()
                 ? "Cancelled by the terminal"
                 : "Cancelled by the terminal: " + reason.strip());
+        log.info("{}: {}", BerthService.name(visit), visit.getRemarks());
         berthService.cancel(visit);
     }
 

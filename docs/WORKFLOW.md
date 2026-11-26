@@ -107,7 +107,7 @@ npm install
 ```
 
 **Confirm it worked:** `node --version` prints a version, and `npm test` in
-`port-console/` reports 92 tests passing (they need neither service running).
+`port-console/` reports 97 tests passing (they need neither service running).
 
 ---
 
@@ -190,10 +190,10 @@ documented experiment, **not** part of the production path.
 ```powershell
 .\gradlew test
 ```
-159 tests in thirteen classes: migrations and schema, the scheduling flow,
+165 tests in fourteen classes: migrations and schema, the scheduling flow,
 several ships per berth, the planning rules, the console's read views, DCSA
 publishing and receiving, the JSON contract of each controller, the turnaround
-between ships, and the time limits on the model service. The ones that touch the database need
+between ships, the time limits on the model service, and what is logged. The ones that touch the database need
 MySQL running (Phase 0.3) and use their own schema, `port_core_test`, which is
 wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 `port_core`.
@@ -201,7 +201,7 @@ wiped and rebuilt on every run. They do not need FastAPI, and they never touch
 **Console, from `port-console/`:**
 
 ```powershell
-npm test        # 92 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
+npm test        # 97 tests: time and visit rules, DCSA messages, timeline layout, seats, the screens' main parts
 npm run lint
 ```
 They run against a mock of the scheduler, so nothing else has to be running.
@@ -260,6 +260,15 @@ fast.
 curl http://127.0.0.1:8080/api/port
 # -> {"unLocode":"NOFRO","name":"Floro",...,"berths":[{"code":"B1",...}, ... B4]}
 ```
+
+**Reading the log.** Every line written for a request carries its id in
+brackets, the same id the answer's `X-Request-Id` header gives. Each planning
+decision and each refusal is a line at INFO; a request that changes something
+ends with a line giving its status and duration. Reads are logged at DEBUG,
+since the console polls them; to see them add
+`--logging.level.com.port.scheduler.config.RequestIdFilter=DEBUG` to the
+arguments. For JSON lines, as a log collector wants them, start with
+`.\gradlew bootRun "--args=--spring.profiles.active=prod"`.
 
 > 🔑 Spring Boot's `EtaService` is configured (`application.properties`) to reach
 > FastAPI at `http://localhost:8000`. If FastAPI is **not** running, the

@@ -6,14 +6,22 @@ import { recordExchange } from '@/features/wire/wireStore'
  * Every request goes through here, which is what makes three things possible
  * in one place: a readable error for any failure, the wire log, and (later) a
  * login token on every request.
+ *
+ * The scheduler names each request in its `X-Request-Id` header, and its log
+ * lines carry the same id. The wire log keeps it, and a failure on the
+ * scheduler's side (5xx) ends its message with "Reference: <id>", so a person
+ * can quote it and the log lines can be found.
  */
 
+export const REQUEST_ID_HEADER = 'X-Request-Id'
+
 export class ApiError extends Error {
-  constructor(message, { status = 0, body = null } = {}) {
+  constructor(message, { status = 0, body = null, requestId = null } = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.body = body
+    this.requestId = requestId
   }
 }
 
@@ -62,6 +70,17 @@ function messageFrom(body, status) {
 }
 
 /**
+ * A failure on the scheduler's side gets the request's id to quote, unless the
+ * message already names it. A refusal (4xx) is left as it is: its reason is
+ * what the person acts on.
+ */
+export function withReference(message, status, requestId) {
+  if (status < 500 || !requestId || message.includes(requestId)) return message
+  const sentence = /[.?!]$/.test(message) ? message : `${message}.`
+  return `${sentence} Reference: ${requestId}`
+}
+
+/**
  * @param {'GET'|'POST'|'PUT'} method
  * @param {string} path  starts with /api
  * @param {{ body?: unknown, params?: Record<string, unknown>, label?: string, quiet?: boolean }} [options]
@@ -91,11 +110,13 @@ export async function http(method, path, { body, params, label, quiet = false } 
   }
 
   const data = parse(await response.text())
-  log({ status: response.status, responseBody: data, failed: !response.ok })
+  const requestId = response.headers.get(REQUEST_ID_HEADER)
+  log({ status: response.status, responseBody: data, failed: !response.ok, requestId })
 
   if (response.status === 401 || response.status === 403) unauthorizedHandler(response.status)
   if (!response.ok) {
-    throw new ApiError(messageFrom(data, response.status), { status: response.status, body: data })
+    const message = withReference(messageFrom(data, response.status), response.status, requestId)
+    throw new ApiError(message, { status: response.status, body: data, requestId })
   }
   return { data, headers: response.headers, status: response.status }
 }

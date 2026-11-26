@@ -18,7 +18,10 @@ import com.port.scheduler.service.VesselVisitService.Scheduled;
 import com.port.scheduler.service.VesselVisitService.VesselSize;
 import com.port.scheduler.support.PersistenceTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -42,6 +45,7 @@ import static org.assertj.core.api.Assertions.within;
  * take ships up to 190 m, B3 and B4 up to 140 m.
  */
 @PersistenceTest
+@ExtendWith(OutputCaptureExtension.class)
 class BerthSequenceTest {
 
     private static final Duration STAY = PlanningRules.typicalStay(VesselType.OTHER);
@@ -120,7 +124,7 @@ class BerthSequenceTest {
     }
 
     @Test
-    void aBookingHeldUpMoreThanTheToleranceMovesToABerthThatCanTakeItSooner() {
+    void aBookingHeldUpMoreThanTheToleranceMovesToABerthThatCanTakeItSooner(CapturedOutput log) {
         Instant before = Instant.now();
         alongsideB1AndTheOthersBooked();
         scheduledIn("V005", Duration.ofHours(1));   // B1, after V001
@@ -138,6 +142,10 @@ class BerthSequenceTest {
             assertThat(e.getBerth().getCode()).isEqualTo("B2");
             assertThat(e.getRemarks()).startsWith("Moved from B1 to B2, which can take it ").endsWith(" sooner");
         });
+        // the decision is in the log too
+        String v005 = "V005 (" + visitOf("V005").getVisitRef() + ")";
+        assertThat(log).contains("Moved " + v005 + " from B1 to B2, ")
+                .contains("Requested arrival for " + v005 + ": " + visitOf("V005").getRtaBerth() + " on B2 (Moved from B1");
     }
 
     @Test
@@ -271,7 +279,7 @@ class BerthSequenceTest {
     // ---- the anchorage
 
     @Test
-    void aShipAtAnchorIsBroughtInRightAfterTheShipBookedBeforeIt() {
+    void aShipAtAnchorIsBroughtInRightAfterTheShipBookedBeforeIt(CapturedOutput log) {
         sized("HELL", Duration.ZERO);
         visitService.arrived("HELL", Instant.now());          // alongside B1 or B2
         sized("ASKV", Duration.ofHours(72));                  // the other, three days out
@@ -301,6 +309,11 @@ class BerthSequenceTest {
         assertThat(viewOf("ASKV").nextEstimateBy()).isNull();
         assertThat(viewOf("ASKV").estimateDueSince()).isNull();
         assertThat(viewOf("ASKV").ataAnchorage()).isEqualTo(anchored);
+        // and in the log, in the order it happened
+        String named = "ASKV (" + askv.getVisitRef() + ")";
+        assertThat(log).containsSubsequence(named + " at the anchorage since " + anchored,
+                "Requested arrival for " + named + ": " + daleLeaves + " on " + berth
+                        + " (At the anchorage since " + anchored + ", ready to come in)");
     }
 
     @Test

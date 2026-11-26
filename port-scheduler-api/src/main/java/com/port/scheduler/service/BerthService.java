@@ -19,6 +19,8 @@ import com.port.scheduler.repository.BerthMaintenanceRepository;
 import com.port.scheduler.repository.BerthRepository;
 import com.port.scheduler.repository.VesselVisitRepository;
 import com.port.scheduler.repository.VisitEventRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,9 +50,15 @@ import java.util.stream.Collectors;
  * virtual queue, which is simply the open visits that hold no berth, oldest
  * first. After every change to the berth plan the plan is worked out again
  * ({@link #replan}).
+ *
+ * Each decision is logged at INFO as it is made: a booking, a withdrawal, a
+ * move to another berth, a requested arrival sent, and each event that
+ * changes a berth. A refusal is logged where it is answered, not here.
  */
 @Service
 public class BerthService {
+
+    private static final Logger log = LoggerFactory.getLogger(BerthService.class);
 
     public record Assignment(String status, String berthId, String berthName, Integer queueNumber) {}
 
@@ -212,6 +220,7 @@ public class BerthService {
         visit.setPhase(VisitPhase.BERTHED);
         eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.ACTUAL,
                 at, Instant.now(), EventSource.VESSEL, berth));
+        log.info("{} alongside {} at {}", name(visit), berth.getCode(), at);
         replan(berths, Notes.none(), null);
     }
 
@@ -259,6 +268,7 @@ public class BerthService {
         visit.setPhase(VisitPhase.ARRIVED);
         eventRepository.save(VisitEvent.of(visit, Milestone.ANCHORAGE_START, TimeClassifier.ACTUAL,
                 at, Instant.now(), EventSource.VESSEL, null));
+        log.info("{} at the anchorage since {}", name(visit), at);
         Notes notes = Notes.none();
         notes.byVisit().put(visit.getId(), "At the anchorage since " + at + ", ready to come in");
         replan(berths, notes, null);
@@ -283,6 +293,7 @@ public class BerthService {
         visit.setAtdAnchorage(at);
         eventRepository.save(VisitEvent.of(visit, Milestone.ANCHORAGE_COMPLETE, TimeClassifier.ACTUAL,
                 at, Instant.now(), EventSource.VESSEL, null));
+        log.info("{} left the anchorage at {}", name(visit), at);
     }
 
     /** Close the allocation and the visit at the given time, record who said so, and replan. */
@@ -292,6 +303,7 @@ public class BerthService {
         visit.depart(at);
         eventRepository.save(VisitEvent.of(visit, Milestone.DEPARTURE_BERTH, TimeClassifier.ACTUAL,
                 at, Instant.now(), source, allocation.getBerth()));
+        log.info("{} left {} at {}, reported by {}", name(visit), allocation.getBerth().getCode(), at, source);
         replan(berths, Notes.none(), null);
     }
 
@@ -315,6 +327,7 @@ public class BerthService {
         allocation.setPlannedEnd(at);
         eventRepository.save(VisitEvent.of(visit, Milestone.CARGO_OPS_COMPLETE, TimeClassifier.ESTIMATED,
                 at, Instant.now(), EventSource.TERMINAL, allocation.getBerth(), remark));
+        log.info("{} on {} expected to leave at {}", name(visit), allocation.getBerth().getCode(), at);
         replan(berths, Notes.none(), null);
     }
 
@@ -386,9 +399,11 @@ public class BerthService {
         BerthMaintenance saved = maintenanceRepository.save(
                 new BerthMaintenance(berth, from, to, reason == null || reason.isBlank() ? null : reason.strip()));
         maintenanceRepository.flush();
+        log.info("Maintenance on {} from {} to {}", berthCode, from, to);
         Notes notes = Notes.none();
         for (BerthAllocation booking : allocationRepository.findByBerthAndStatusIn(berth, List.of(AllocationStatus.PLANNED))) {
             if (saved.overlaps(booking.getPlannedStart(), booking.getPlannedEnd())) {
+                log.info("{} loses its booking on {} to maintenance", name(booking.getVisit()), berthCode);
                 booking.setStatus(AllocationStatus.CANCELLED);
                 notes.displaced().add(booking.getVisit().getId());
                 notes.byVisit().put(booking.getVisit().getId(),
@@ -411,6 +426,8 @@ public class BerthService {
         }
         maintenanceRepository.delete(window.get());
         maintenanceRepository.flush();
+        log.info("Maintenance on {} from {} to {} removed", berthCode, window.get().getStartsAt(),
+                window.get().getEndsAt());
         replan(berths, Notes.none(), null);
         return true;
     }
@@ -483,6 +500,7 @@ public class BerthService {
                     .filter(a -> a.getVisit().getId().equals(changed.getId())).findFirst();
             if (own.isPresent() && withdraws(changed, own.get(), lines.get(own.get().getBerth().getId()),
                     booked, maintenance, notes, now)) {
+                log.info("{}: {}", name(changed), notes.byVisit().get(changed.getId()));
                 own.get().setStatus(AllocationStatus.CANCELLED);
                 booked.get(own.get().getBerth().getId()).remove(own.get());
                 allocationRepository.flush();
@@ -549,6 +567,7 @@ public class BerthService {
             BerthAllocation allocation = new BerthAllocation(visit, slot.berth(), slot.start());
             allocation.setPlannedEnd(slot.start().plus(stay(visit)));
             allocationRepository.save(allocation);
+            log.info("Booked {} on {} from {}", name(visit), slot.berth().getCode(), slot.start());
             visit.setTerminal(slot.berth().getQuay().getTerminal());
             booked.get(slot.berth().getId()).add(allocation);
             booked.get(slot.berth().getId()).sort(Comparator.comparing(BerthAllocation::getPlannedStart));
@@ -718,6 +737,7 @@ public class BerthService {
             Berth from = move.getBerth();
             VesselVisit visit = move.getVisit();
             Duration sooner = Duration.between(targetStart, move.getPlannedStart());
+            log.info("Moved {} from {} to {}, {} sooner", name(visit), from.getCode(), target.getCode(), describe(sooner));
             move.setStatus(AllocationStatus.CANCELLED);
             booked.get(from.getId()).remove(move);
             allocationRepository.flush();
@@ -901,6 +921,13 @@ public class BerthService {
         visit.setPtaBerth(null);
         eventRepository.save(VisitEvent.of(visit, Milestone.ARRIVAL_BERTH, TimeClassifier.REQUESTED,
                 time, Instant.now(), EventSource.TERMINAL, berth, remarks));
+        log.info("Requested arrival for {}: {} on {}{}", name(visit), time,
+                berth == null ? "no berth yet" : berth.getCode(), remarks == null ? "" : " (" + remarks + ")");
+    }
+
+    /** A vessel and its call, as the log names them: {@code KVITSOY (V-20261126-0001)}. */
+    static String name(VesselVisit visit) {
+        return visit.getVessel().getCode() + " (" + visit.getVisitRef() + ")";
     }
 
     private Assignment assignmentOf(VesselVisit visit) {

@@ -19,7 +19,10 @@ import com.port.scheduler.model.view.VisitView.PositionReport;
 import com.port.scheduler.service.PortViewService;
 import com.port.scheduler.support.PersistenceTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -32,6 +35,7 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /** DCSA Port Call events from a vessel operator, applied to real MySQL. */
 @PersistenceTest
+@ExtendWith(OutputCaptureExtension.class)
 class PortCallEventReceiverTest {
 
     private static final Instant ETA = Instant.now().plus(Duration.ofHours(6)).truncatedTo(ChronoUnit.SECONDS);
@@ -93,7 +97,7 @@ class PortCallEventReceiverTest {
     }
 
     @Test
-    void anArrivalAtABerthWhereAnotherVesselStillLiesIsReportedAgainstItsEvent() {
+    void anArrivalAtABerthWhereAnotherVesselStillLiesIsReportedAgainstItsEvent(CapturedOutput log) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         receiver.receive(List.of(berth("ARRI", "EST", now), berth("ARRI", "ACT", now)));   // alongside B1
         receiver.receive(List.of(estimateFor(named(null, null, "FILL-2")), estimateFor(named(null, null, "FILL-3")),
@@ -107,6 +111,9 @@ class PortCallEventReceiverTest {
 
         assertThat(feedback).extracting(FeedbackElement::severity, FeedbackElement::message).containsExactly(
                 tuple("ERROR", "B1 still has IMO9321483 alongside; its departure is recorded first"));
+        // a refusal is logged with its reason, naming the event
+        assertThat(log).contains("DCSA event with no eventID at $.events[0] for 'SECOND': BERTH ARRI ACT " + now
+                + " refused: B1 still has IMO9321483 alongside; its departure is recorded first");
         assertThat(views.visits("SECOND", false).get(0).phase()).isEqualTo(VisitPhase.INBOUND);
     }
 
@@ -318,7 +325,7 @@ class PortCallEventReceiverTest {
     // ---- repeated and out-of-order events (backlog case 9)
 
     @Test
-    void aRepeatedEventIsAppliedOnceAndAnUpdateOfItIsApplied() {
+    void aRepeatedEventIsAppliedOnceAndAnUpdateOfItIsApplied(CapturedOutput log) {
         UUID id = UUID.randomUUID();
         Instant sent = Instant.now().minus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.SECONDS);
         assertThat(receiver.receive(List.of(estimate(id, sent, ETA)))).isEmpty();
@@ -334,6 +341,11 @@ class PortCallEventReceiverTest {
         // the same event, updated later: applied
         assertThat(receiver.receive(List.of(estimate(id, sent.plusSeconds(60), ETA.plus(Duration.ofHours(2)))))).isEmpty();
         assertThat(visits.findAll().get(0).getEtaBerth()).isEqualTo(ETA.plus(Duration.ofHours(2)));
+        // each delivery is logged by its id: applied, answered, applied
+        String event = "DCSA event " + id + " at $.events[0] for IMO 9321483: BERTH ARRI EST ";
+        assertThat(log).containsSubsequence(event + ETA + " applied",
+                event + ETA.plus(Duration.ofHours(2)) + ": INFO Already received at",
+                event + ETA.plus(Duration.ofHours(2)) + " applied");
     }
 
     @Test

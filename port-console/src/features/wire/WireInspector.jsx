@@ -65,6 +65,11 @@ function Exchange({ entry }) {
       </button>
       {open && (
         <div className="grid gap-3 bg-surface-2 px-5 py-3 md:grid-cols-2">
+          {entry.requestId && (
+            <p className="text-xs text-ink-2 md:col-span-2">
+              Request id <span className="font-mono text-ink">{entry.requestId}</span>
+            </p>
+          )}
           <Body title="Sent" value={entry.requestBody} empty="No body" />
           <Body title="Answer" value={entry.responseBody} empty="Empty answer" />
         </div>

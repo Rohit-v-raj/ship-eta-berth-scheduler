@@ -156,7 +156,8 @@ for each (there is no login yet; roles are built in so one can be added).
   model's ETA and the speed that meets the terminal's time; then send the
   estimate, accept the request, propose another time or omit.
 - **Port call events:** the DCSA feed, filterable, with the raw message per row.
-- **Wire inspector:** every request a click sent and the scheduler's answer.
+- **Wire inspector:** every request a click sent, the scheduler's answer, and
+  the request id its log lines carry.
 - **Stories:** the whole berth conversation played one step at a time against
   the real scheduler, each step explained from the answer it got.
 
@@ -352,8 +353,8 @@ sends them for you; **`docs/END-TO-END-GUIDE.md`** gives every request as a
 `curl` command, with the answer to expect and how each step lines up with the
 standard.
 
-Java tests (159, against a throwaway MySQL schema): `.\gradlew test` from
-`port-scheduler-api/`. Console tests (92): `npm test` from `port-console/`.
+Java tests (165, against a throwaway MySQL schema): `.\gradlew test` from
+`port-scheduler-api/`. Console tests (97): `npm test` from `port-console/`.
 
 ## Data
 

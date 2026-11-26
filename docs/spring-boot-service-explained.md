@@ -106,7 +106,8 @@ port-scheduler-api/
 ├── secrets.properties.example   # template for the gitignored secrets.properties
 └── src/
     ├── main/resources/
-    │   ├── application.properties   # config: ports, model URL, database
+    │   ├── application.properties   # config: ports, model URL, database, log pattern
+    │   ├── application-prod.properties  # the prod profile: JSON log lines
     │   └── db/migration/            # Flyway SQL: V1 topology, V2 vessel,
     │                                #   V3 vessel visit, V4 demo port seed,
     │                                #   V5 wider IMO number, V6 planned stay,
@@ -142,8 +143,9 @@ port-scheduler-api/
     │   │                                    #   model/view/ is what the console reads
     │   ├── exceptions/                      # BerthNotFoundException + JSON error handler
     │   ├── components/PortDispatchTools.java  # the agent's tools (stubbed)
-    │   └── config/JpaConfig.java            # switches on audit timestamps
-    └── test/java/com/port/scheduler/        # 159 tests in thirteen classes (§10)
+    │   └── config/                          # JpaConfig (audit timestamps),
+    │                                        #   RequestIdFilter (the request id, §5a)
+    └── test/java/com/port/scheduler/        # 165 tests in fourteen classes (§10)
 ```
 
 **The package structure follows a standard layered pattern:**
@@ -164,6 +166,9 @@ real Spring app is organised, and it keeps each class small and single-purpose.
 ```properties
 spring.application.name=port-scheduler-api
 server.port=8080
+
+# every log line carries the request's id, in brackets ("-" outside a request)
+logging.pattern.correlation=[%X{requestId:--}]\u0020
 
 # Base URL of the Python FastAPI ETA model service (Phase 2)
 eta.api.url=http://localhost:8000
@@ -201,6 +206,52 @@ settings, all under `port.planning.*` (§7c): the re-issue threshold (15 min),
 the answer window (60 min), the late tolerance (240 min), the estimate
 milestones (72, 48, 24 h), the booking horizon (168 h), the overstay step
 (60 min) and the turnaround between ships (60 min).
+
+### 5a. Logging
+
+The service logs through SLF4J to standard output; there is no log file, so in
+production whatever runs the service collects its output.
+
+- **A request id.** `config/RequestIdFilter` runs first on every request. It
+  takes the caller's `X-Request-Id` if it is a short plain token (letters,
+  digits, `.`, `_`, `-`, up to 64), or makes one of 12 hex characters, and
+  returns it in the `X-Request-Id` header of the answer, errors included.
+  While the request runs the id is in the logging context (SLF4J's `MDC`, key
+  `requestId`), and `logging.pattern.correlation` prints it on every line:
+  `[3f9c2a7b41d0]`. The `\u0020` at the end is the space after the brackets;
+  a plain trailing space is easily lost by an editor.
+- **One line per request**, after it: method, path, status and duration. At
+  INFO for a request that changes something; at DEBUG for a read, because the
+  console polls its reads every 5 seconds (add
+  `--logging.level.com.port.scheduler.config.RequestIdFilter=DEBUG` to see
+  them). The query string is never logged: `/api/agent/ping?prompt=` carries
+  free text.
+- **Decisions, where they are made**, at INFO. `BerthService`: a booking, a
+  withdrawal, a move to another berth, each requested arrival sent, arrivals,
+  departures, the anchorage, maintenance. `VesselVisitService`: a call opened,
+  an estimate, an acceptance, an omission, a cancellation, a new vessel
+  record. Each line names the ship and its call, `KVITSOY (VV-20261126-…)`. A
+  line is written as the decision is made; if the transaction then fails, the
+  failure follows under the same id.
+- **Refusals, where they are answered**, at INFO with the reason:
+  `PortCallEventReceiver` writes one line per DCSA event (applied, answered
+  with a note, or refused), and `GlobalExceptionHandler` one per refusal it
+  answers (`Refused with 409: …`). A refusal is not logged where it is thrown,
+  so it appears once.
+- **Failures** at WARN (the model service not answering, with the cause) or
+  ERROR (an event that could not be stored; anything unexpected). The
+  handler's last-resort method takes whatever no other one expects: Spring's
+  own refusals (no such route, a method or media type the route does not take)
+  keep their status, and anything else is logged at ERROR with its stack trace
+  and answered `500`, `Something went wrong in the scheduler. Reference: <id>`.
+  The cause's text never reaches the caller.
+- **Never logged:** secrets, prompts to the assistant or its answers (only
+  their size), request bodies, query strings.
+- **JSON in production.** `application-prod.properties` sets
+  `logging.structured.format.console=ecs`: with `--spring.profiles.active=prod`
+  each line is one JSON object in the Elastic Common Schema, with `requestId`
+  as a field. JSON also escapes line breaks, so text that comes from outside
+  (a ship's name) cannot fake a log line.
 
 ---
 
@@ -881,7 +932,7 @@ the answer to expect. The short version, run on 13 October 2026:
 Everything above is held in MySQL, not in memory, so stopping and starting the
 service loses nothing: `GET /api/visits?state=all` still lists earlier visits.
 
-The same behaviour is covered by automated tests (`.\gradlew test`, 159 tests):
+The same behaviour is covered by automated tests (`.\gradlew test`, 165 tests):
 
 | Test class | What it proves |
 |---|---|
@@ -942,7 +993,8 @@ The agent is not connected to the rest of the service yet. Every tool in
 `PortDispatchTools` returns fixed sample data, so its answers do not reflect the
 real berths or the real ETA model. Backing those tools with `BerthService` and
 `EtaService` is the next step for this part, along with authentication before
-any tool is allowed to change state.
+any tool is allowed to change state. Its routes log the size of a prompt and an
+answer, never the text (§5a).
 
 ---
 
