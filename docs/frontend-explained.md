@@ -190,6 +190,14 @@ API share one origin.
 three things happen in one place: a readable message for any failure, the wire
 log, and (later) a login token on each request.
 
+**The request id.** The scheduler names every request in its `X-Request-Id`
+header, and its log lines carry the same id. `http.js` keeps it on the wire log
+entry (the inspector shows it as "Request id …" when an entry is opened) and on
+`ApiError`. A failure on the scheduler's side (5xx) ends its message with
+"Reference: <id>", so a person can quote it and the log lines can be found; a
+refusal (4xx) is shown as the scheduler worded it, since its reason is what the
+person acts on.
+
 **Two files, one per kind of request.** They match the scheduler's controllers:
 
 | File | Talks to | What it sends |
@@ -247,7 +255,7 @@ cd port-console
 npm install          # once
 npm run dev          # http://localhost:5173, needs both services running
 npm run dev:mock     # every screen from sample data, nothing else running
-npm test             # 92 tests
+npm test             # 97 tests
 npm run lint
 npm run build        # a production build in dist/
 ```

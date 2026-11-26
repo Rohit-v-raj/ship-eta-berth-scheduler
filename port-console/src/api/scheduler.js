@@ -1,4 +1,4 @@
-import { ApiError, http } from './http'
+import { ApiError, http, withReference } from './http'
 
 /**
  * The scheduler's own endpoints (everything except the DCSA ones, which are in
@@ -48,12 +48,15 @@ export async function getVisit(visitRef) {
 }
 
 // The scheduler calls the ETA model for the calculator. If the model service
-// is down the scheduler answers 500, which on its own tells the reader nothing.
+// is down the scheduler answers 5xx; say which service to look at, and keep the
+// request's reference so the scheduler's log lines can be found.
 function explainModelFailure(error) {
   if (error instanceof ApiError && error.status >= 500) {
-    return new ApiError('The scheduler could not get an ETA. Is the ETA model service running on port 8000?', {
+    const message = 'The scheduler could not get an ETA. Is the ETA model service running on port 8000?'
+    return new ApiError(withReference(message, error.status, error.requestId), {
       status: error.status,
       body: error.body,
+      requestId: error.requestId,
     })
   }
   return error

@@ -29,11 +29,15 @@ import com.port.scheduler.service.BerthService;
 import com.port.scheduler.service.PortViewService;
 import com.port.scheduler.service.VesselVisitService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -42,6 +46,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
@@ -53,11 +58,17 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** The JSON contract of what the console reads, and of the planner's two actions, with the services mocked out. */
+/**
+ * The JSON contract of what the console reads, and of the planner's two
+ * actions, with the services mocked out; and what every answer shares: its
+ * request id, and the log lines that carry it.
+ */
 @WebMvcTest(ConsoleController.class)
+@ExtendWith(OutputCaptureExtension.class)
 class ConsoleControllerTest {
 
     private static final Instant REPORTED = Instant.parse("2026-10-13T12:00:00Z");
@@ -379,5 +390,70 @@ class ConsoleControllerTest {
                 .andExpect(status().isNotFound());
         mvc.perform(get("/api/ships/berths")).andExpect(status().isNotFound());
         mvc.perform(put("/api/ships/berths/B1/release")).andExpect(status().isNotFound());
+    }
+
+    // ---- the request id and the log
+
+    @Test
+    void everyAnswerCarriesARequestIdAndKeepsOneTheCallerSent() throws Exception {
+        mvc.perform(get("/api/visits"))
+                .andExpect(header().string("X-Request-Id", matchesPattern("[0-9a-f]{12}")));
+        mvc.perform(get("/api/visits").header("X-Request-Id", "console-42.a_b"))
+                .andExpect(header().string("X-Request-Id", "console-42.a_b"));
+        // one that is not a short plain token is replaced, so nothing odd reaches the log
+        mvc.perform(get("/api/visits").header("X-Request-Id", "two words"))
+                .andExpect(header().string("X-Request-Id", matchesPattern("[0-9a-f]{12}")));
+        mvc.perform(get("/api/visits").header("X-Request-Id", "x".repeat(65)))
+                .andExpect(header().string("X-Request-Id", matchesPattern("[0-9a-f]{12}")));
+        // an error answer carries one too
+        mvc.perform(get("/api/visits").param("state", "closed"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().exists("X-Request-Id"));
+    }
+
+    @Test
+    void anUnexpectedFailureIsLoggedWithItsCauseAndAnsweredWithTheIdOnly(CapturedOutput log) throws Exception {
+        given(views.port()).willThrow(new IllegalStateException("internal detail of the failure"));
+
+        MvcResult result = mvc.perform(get("/api/port"))
+                .andExpect(status().isInternalServerError())
+                .andReturn();
+
+        String id = result.getResponse().getHeader("X-Request-Id");
+        assertThat(id).isNotBlank();
+        assertThat(result.getResponse().getContentAsString())
+                .contains("\"message\":\"Something went wrong in the scheduler. Reference: " + id + "\"")
+                .doesNotContain("internal detail");
+        // the cause is in the log, on a line that carries the same id
+        assertThat(log.getOut()).containsPattern("ERROR .*\\[" + id + "\\] .*Unexpected failure")
+                .contains("java.lang.IllegalStateException: internal detail of the failure");
+    }
+
+    @Test
+    void springsOwnRefusalsKeepTheirStatus() throws Exception {
+        mvc.perform(get("/api/no-such-route"))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/port"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().exists("Allow"))
+                .andExpect(jsonPath("$.statusCode").value(405));
+    }
+
+    @Test
+    void aChangeIsLoggedWithItsOutcomeAndAReadIsNot(CapturedOutput log) throws Exception {
+        given(berthService.release("B2")).willReturn(true);
+        willThrow(new VisitConflictException("Visit V-9 is already over")).given(visitService).cancelByTerminal("V-9", null);
+
+        String id = mvc.perform(put("/api/port/berths/B2/release"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getHeader("X-Request-Id");
+        mvc.perform(put("/api/visits/V-9/cancel")).andExpect(status().isConflict());
+        mvc.perform(get("/api/visits")).andExpect(status().isOk());
+
+        assertThat(log.getOut())
+                .containsPattern("INFO .*\\[" + id + "\\] .*: PUT /api/port/berths/B2/release 200 in \\d+ ms")
+                .contains("Refused with 409: Conflict: Visit V-9 is already over")
+                .contains("PUT /api/visits/V-9/cancel 409 in ")
+                .doesNotContain("GET /api/visits 200");
     }
 }

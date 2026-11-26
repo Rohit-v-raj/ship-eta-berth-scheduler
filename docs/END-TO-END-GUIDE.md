@@ -1567,6 +1567,9 @@ Worth running: a system is as clear in its refusals as in its answers.
 | `POST` an estimate or omitted call sent before the latest event already applied for its vessel | `200`, `WARN`: `Not applied: this event was sent at …, before the latest event from this vessel, …` |
 | `POST` an `eventUpdatedDateTime` more than 5 minutes ahead of the clock | `200`, `ERROR`: `eventUpdatedDateTime cannot be in the future: …` |
 | `POST /api/ships/schedule`, `GET /api/ships/berths`, `POST /api/operator/vessels/X/accept` | `404`. These routes were removed; section 13 says what replaced each |
+| A route that does not exist, e.g. `GET /api/no-such-route` | `404`, `No static resource api/no-such-route.` |
+| A method the route does not take, e.g. `DELETE /api/port` | `405`, `Method 'DELETE' is not supported.`, with an `Allow` header |
+| Anything that fails inside the scheduler unexpectedly (a fault of ours, the database gone) | `500`, `Something went wrong in the scheduler. Reference: 3f9c2a7b41d0`. The cause is in the scheduler's log under that id, never in the answer |
 
 Two refusals in one request, to see that each is reported against its own
 event:
@@ -1592,6 +1595,39 @@ EOF
 Each event is applied in its own transaction, so one that fails does not undo
 the others.
 
+**Every answer carries a request id**, refusals and failures included, in the
+`X-Request-Id` header: `curl -i` shows it. Every log line the scheduler writes
+for that request carries the same id, so the lines that belong together can be
+found. A caller may send its own (letters, digits, `.`, `_` and `-`, up to 64);
+anything else is replaced. An estimated arrival sent with
+`-H "X-Request-Id: live-est-1"` gave these lines (date and process left out):
+
+```
+INFO [live-est-1] c.p.s.service.VesselVisitService      : New vessel record LOGTEST
+INFO [live-est-1] c.p.s.service.VesselVisitService      : Opened VV-20261126-4C65AAAB for LOGTEST, estimated arrival 2026-11-29T07:41:26Z
+INFO [live-est-1] c.port.scheduler.service.BerthService : Booked LOGTEST (VV-20261126-4C65AAAB) on B1 from 2026-11-29T07:41:26Z
+INFO [live-est-1] c.port.scheduler.service.BerthService : Requested arrival for LOGTEST (VV-20261126-4C65AAAB): 2026-11-29T07:41:26Z on B1
+INFO [live-est-1] c.p.s.dcsa.PortCallEventReceiver      : DCSA event 8ca3cf0e-… at $.events[0] for 'LOGTEST': BERTH ARRI EST 2026-11-29T07:41:26Z applied
+INFO [live-est-1] c.port.scheduler.config.RequestIdFilter : POST /api/port-call/v2/events 200 in 422 ms
+```
+
+A request that changes something gets the last line at INFO, with its status
+and duration; a read gets it at DEBUG, since the console polls its reads every
+5 seconds. Each planning decision (a booking, a withdrawal, a move to another
+berth, a requested arrival sent) is a line at INFO, and so is each refusal,
+with its reason. A failure is WARN (the model service not answering) or ERROR
+(the cause of a `500`, or an event that could not be stored). Prompts to the
+assistant, request bodies and query strings are never logged.
+
+With `--spring.profiles.active=prod` the same lines are written as JSON, one
+object per line in the Elastic Common Schema, with the id as the field
+`requestId`:
+
+```bash
+cd port-scheduler-api
+./gradlew bootRun --args="--spring.profiles.active=prod"
+```
+
 ---
 
 ## 8. The assistant (`AgentController`)
@@ -1613,7 +1649,8 @@ curl -s -X POST $API/api/agent/evaluate -H "$J" -d '{"mmsi":"123456789","berthId
 (`toolsUsed`, `reasoningSummary`, `operationalDecision`, `instructionsToMaster`)
 and `/evaluate` an assessment (`vesselStatus`, `conflictDetected`,
 `operationalRecommendation`, `noticeToCaptain`). Connecting its tools to the
-real berths and the real model is planned work.
+real berths and the real model is planned work. The log records the size of
+a prompt and of an answer, never their text.
 
 ---
 
@@ -1649,7 +1686,7 @@ sent, so you can compare it with this guide.
 
 ```powershell
 cd port-scheduler-api
-.\gradlew test          # 159 tests in thirteen classes; needs MySQL, not FastAPI
+.\gradlew test          # 165 tests in fourteen classes; needs MySQL, not FastAPI
 ```
 
 | Test class | What it proves |
@@ -1658,7 +1695,8 @@ cd port-scheduler-api
 | `PortCallEventReceiverTest` | Each incoming event: a repeat applied once, one overtaken by a later event not applied, estimate, position, accept, stale accept, arrival, departure, omit, the anchorage |
 | `PortCallEventPublisherTest` | What is published, the filters, the cursor, and the two flags for a call that did not take place |
 | `VesselOperatorControllerTest` | The calculator's answer, with and without an open call, and that it stores nothing |
-| `ConsoleControllerTest` | The JSON of every read, of release and of cancel, with their `404`, `409` and `400` answers |
+| `ConsoleControllerTest` | The JSON of every read, of release and of cancel, with their `404`, `409` and `400` answers; the request id on every answer, the log line for a change, and the plain `500` for an unexpected failure |
+| `AgentControllerTest` | That a prompt to the assistant and its answer stay out of the log |
 | `PortViewServiceTest`, `BerthSchedulingTest` | The views and the scheduling rules through real MySQL: booked ships' times refreshed, the answer and the estimate that are due, the terminal's cancellation, berth fit, maintenance, a booked ship that falls behind, overstays |
 | `BerthSequenceTest` | Several ships per berth: the gap before a booking, a booking that moves to a berth much sooner, maintenance over a booked ship, an arrival at an occupied berth or before the ship's turn, a ship at anchor brought in sooner |
 | `BerthTurnaroundTest` | The hour between ships, with the turnaround set as in production |
@@ -1667,7 +1705,7 @@ cd port-scheduler-api
 
 ```powershell
 cd port-console
-npm test                # 92 tests; nothing else needs to be running
+npm test                # 97 tests; nothing else needs to be running
 npm run lint
 ```
 

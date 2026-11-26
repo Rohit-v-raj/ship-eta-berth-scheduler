@@ -45,6 +45,10 @@ import java.util.Optional;
  * another port is refused. A repeated event is answered and not applied
  * again, and an estimate or omitted call that arrives after a later event
  * from the same vessel is not applied.
+ *
+ * Each event's outcome is logged in one line at INFO, naming the event:
+ * applied, applied or answered with a note, or refused with the reason. An
+ * event that could not be stored is logged at ERROR with its cause.
  */
 @Service
 public class PortCallEventReceiver {
@@ -88,19 +92,70 @@ public class PortCallEventReceiver {
     }
 
     private Optional<FeedbackElement> receive(Event event, String path, String here) {
+        String about = describe(event, path);
         try {
             // one transaction per event: its effects and its receipt are kept together, or neither
             Note note = transactions.execute(status -> apply(event, here));
-            return note == null ? Optional.empty() : Optional.of(new FeedbackElement(note.severity(), note.message(), path));
+            if (note == null) {
+                log.info("{} applied", about);
+                return Optional.empty();
+            }
+            log.info("{}: {} {}", about, note.severity(), note.message());
+            return Optional.of(new FeedbackElement(note.severity(), note.message(), path));
         } catch (StaleEventException e) {
+            log.info("{}: WARN {}", about, e.getMessage());
             return Optional.of(new FeedbackElement("WARN", e.getMessage(), path));
         } catch (DataAccessException | TransactionException e) {
             // the database's own message names tables and columns; the sender gets a plain one
-            log.warn("DCSA event {} could not be stored", path, e);
+            log.error("{} could not be stored", about, e);
             return Optional.of(new FeedbackElement("ERROR", "The event could not be stored", path));
         } catch (RuntimeException e) {
+            log.info("{} refused: {}", about, e.getMessage());
             return Optional.of(new FeedbackElement("ERROR", e.getMessage(), path));
         }
+    }
+
+    /**
+     * The event as the log names it: its id and place in the request, the
+     * vessel, and what it reports, for example {@code DCSA event 3f2a… at
+     * $.events[0] for IMO 9321483: BERTH ARRI EST 2026-11-26T10:00:00Z}. Text
+     * the sender chose is shortened.
+     */
+    static String describe(Event event, String path) {
+        if (event == null) {
+            return "DCSA event at " + path;
+        }
+        StringBuilder about = new StringBuilder("DCSA event ")
+                .append(event.eventID() == null ? "with no eventID" : event.eventID().toString())
+                .append(" at ").append(path);
+        Vessel vessel = event.vessel();
+        if (vessel != null) {
+            if (vessel.vesselIMONumber() != null) {
+                about.append(" for IMO ").append(brief(vessel.vesselIMONumber()));
+            } else if (vessel.vesselMMSINumber() != null) {
+                about.append(" for MMSI ").append(brief(vessel.vesselMMSINumber()));
+            } else if (vessel.vesselName() != null) {
+                about.append(" for '").append(brief(vessel.vesselName())).append("'");
+            }
+        }
+        if (omitted(event)) {
+            return about.append(": omitted call").toString();
+        }
+        StringBuilder what = new StringBuilder();
+        PortCallService service = event.portCallService();
+        if (service != null) {
+            what.append(' ').append(brief(service.portCallServiceTypeCode()))
+                    .append(' ').append(brief(service.portCallServiceEventTypeCode()));
+        }
+        Timestamp timestamp = event.timestamp();
+        if (timestamp != null) {
+            what.append(' ').append(brief(timestamp.classifierCode())).append(' ').append(timestamp.serviceDateTime());
+        }
+        return what.isEmpty() ? about.toString() : about.append(':').append(what).toString();
+    }
+
+    private static String brief(String text) {
+        return text == null || text.length() <= 40 ? text : text.substring(0, 40) + "…";
     }
 
     private String thisPort() {

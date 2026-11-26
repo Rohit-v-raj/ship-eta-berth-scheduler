@@ -1,10 +1,16 @@
 package com.port.scheduler.exceptions;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -13,6 +19,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.server.ResponseStatusException;
 
 import com.google.genai.errors.ServerException;
+import com.port.scheduler.config.RequestIdFilter;
 
 import java.util.stream.Collectors;
 
@@ -20,9 +27,17 @@ import java.util.stream.Collectors;
  * Error replies for the console's and the operator's routes, each with a
  * message a person can act on. The DCSA route answers in the standard's own
  * format through its controller's handler, which takes precedence there.
+ *
+ * Every reply is logged: a refusal (4xx) at INFO with its reason, a failure
+ * (5xx) at WARN. Anything no other handler expects is logged at ERROR with
+ * its cause, and the caller is told only that something went wrong, with the
+ * request's id to quote.
  */
 @ControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
     @ExceptionHandler
     public ResponseEntity<BerthErrorResponse> getBerthNotFoundResponse(BerthNotFoundException e)
     {
@@ -48,6 +63,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler
     public ResponseEntity<BerthErrorResponse> getEtaServiceUnavailableResponse(EtaServiceUnavailableException e)
     {
+        // the deepest cause names what happened (a refused connection has no message, only its type)
+        log.warn("The ETA model service did not answer: {}", NestedExceptionUtils.getMostSpecificCause(e).toString());
         return reply(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
     }
 
@@ -88,15 +105,50 @@ public class GlobalExceptionHandler {
         return reply(HttpStatus.BAD_REQUEST, "The parameter '" + e.getParameterName() + "' is missing");
     }
 
+    /**
+     * Everything the handlers above do not expect. Spring's own refusals (no
+     * such route, a method or media type the route does not take) keep their
+     * status. Anything else is a failure of ours: logged at ERROR with its
+     * cause, and answered 500 with the request's id, never with the cause's
+     * own text.
+     */
+    @ExceptionHandler
+    public ResponseEntity<BerthErrorResponse> getUnexpectedResponse(Exception e)
+    {
+        if (e instanceof ErrorResponse refusal) {
+            String detail = refusal.getBody().getDetail();
+            return reply(refusal.getStatusCode(), detail != null ? detail : refusal.getStatusCode().toString(),
+                    refusal.getHeaders());
+        }
+        log.error("Unexpected failure", e);
+        String id = MDC.get(RequestIdFilter.MDC_KEY);
+        String message = "Something went wrong in the scheduler" + (id == null ? "" : ". Reference: " + id);
+        return answer(HttpStatus.INTERNAL_SERVER_ERROR, message, HttpHeaders.EMPTY);
+    }
+
     private static String describe(FieldError error) {
         return error.getField() + ": " + error.getDefaultMessage();
     }
 
     private static ResponseEntity<BerthErrorResponse> reply(HttpStatusCode status, String message) {
+        return reply(status, message, HttpHeaders.EMPTY);
+    }
+
+    /** The reply, logged: a refusal at INFO, a failure at WARN. */
+    private static ResponseEntity<BerthErrorResponse> reply(HttpStatusCode status, String message, HttpHeaders headers) {
+        if (status.is5xxServerError()) {
+            log.warn("Answered {}: {}", status.value(), message);
+        } else {
+            log.info("Refused with {}: {}", status.value(), message);
+        }
+        return answer(status, message, headers);
+    }
+
+    private static ResponseEntity<BerthErrorResponse> answer(HttpStatusCode status, String message, HttpHeaders headers) {
         BerthErrorResponse body = new BerthErrorResponse();
         body.setStatusCode(status.value());
         body.setMessage(message);
         body.setTimeStamp(System.currentTimeMillis());
-        return new ResponseEntity<>(body, status);
+        return new ResponseEntity<>(body, headers, status);
     }
 }
