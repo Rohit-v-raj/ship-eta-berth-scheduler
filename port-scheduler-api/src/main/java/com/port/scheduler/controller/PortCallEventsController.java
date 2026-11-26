@@ -1,11 +1,5 @@
 package com.port.scheduler.controller;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.exc.InvalidFormatException;
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.port.scheduler.dcsa.PortCallEventPublisher;
 import com.port.scheduler.dcsa.PortCallEventReceiver;
 import com.port.scheduler.dcsa.PortCallEventPublisher.Filter;
@@ -26,6 +20,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.exc.InvalidFormatException;
+import tools.jackson.databind.exc.MismatchedInputException;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -88,7 +87,7 @@ public class PortCallEventsController {
             Event event;
             try {
                 event = json.treeToValue(events.get(i), Event.class);
-            } catch (JsonProcessingException e) {
+            } catch (JacksonException e) {
                 feedback.add(unreadable(e, path));
                 continue;
             }
@@ -100,12 +99,10 @@ public class PortCallEventsController {
     }
 
     /** An event that could not be read, refused by itself with the field that stopped it. */
-    static FeedbackElement unreadable(JsonProcessingException e, String path) {
+    static FeedbackElement unreadable(JacksonException e, String path) {
         StringBuilder field = new StringBuilder();
-        if (e instanceof JsonMappingException mapping) {
-            for (JsonMappingException.Reference ref : mapping.getPath()) {
-                field.append(ref.getFieldName() != null ? "." + ref.getFieldName() : "[" + ref.getIndex() + "]");
-            }
+        for (JacksonException.Reference ref : e.getPath()) {
+            field.append(ref.getPropertyName() != null ? "." + ref.getPropertyName() : "[" + ref.getIndex() + "]");
         }
         String name = field.length() > 0 ? field.substring(1) : "the event";
         Object value = e instanceof InvalidFormatException format ? format.getValue() : null;

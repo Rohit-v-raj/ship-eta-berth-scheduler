@@ -11,8 +11,8 @@ import com.port.scheduler.service.PortViewService;
 import com.port.scheduler.service.VesselVisitService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -38,9 +38,9 @@ class VesselOperatorControllerTest {
     private static final EtaResponse MODEL = new EtaResponse(150.0, 2.5, 30.0, 150.0);
 
     @Autowired MockMvc mvc;
-    @MockBean EtaService etaService;
-    @MockBean PortViewService views;
-    @MockBean VesselVisitService vesselVisitService;
+    @MockitoBean EtaService etaService;
+    @MockitoBean PortViewService views;
+    @MockitoBean VesselVisitService vesselVisitService;
 
     @Test
     void aShipWithNoCallGetsTheModelsEstimateAndNothingElse() throws Exception {
