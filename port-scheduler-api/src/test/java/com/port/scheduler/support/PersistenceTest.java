@@ -6,8 +6,8 @@ import com.port.scheduler.config.JpaConfig;
 import com.port.scheduler.service.BerthService;
 import com.port.scheduler.service.PortViewService;
 import com.port.scheduler.service.VesselVisitService;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 

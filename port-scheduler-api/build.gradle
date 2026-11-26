@@ -1,7 +1,7 @@
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '3.3.5'
-    id 'io.spring.dependency-management' version '1.1.6'
+    id 'org.springframework.boot' version '4.1.3'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
 
 group = 'com.port'
@@ -15,28 +15,23 @@ java {
 }
 
 repositories {
+    // every dependency is a release on Maven Central; no milestone or snapshot repositories
     mavenCentral()
-    maven { url 'https://repo.spring.io/milestone' }
-    maven { url 'https://repo.spring.io/snapshot' }
-    maven {
-    name = 'Central Portal Snapshots'
-    url = 'https://central.sonatype.com/repository/maven-snapshots/'
-  }
 }
 
 ext {
     // Defines the BOM version for all Spring AI starters
-    set('springAiVersion', "1.1.6")
+    set('springAiVersion', "2.0.3")
 }
 
 dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
-    implementation 'org.flywaydb:flyway-core'
-
+    // Spring Boot 4 runs migrations only with its Flyway starter; flyway-mysql adds the MySQL support
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-mysql'
 
     runtimeOnly 'com.mysql:mysql-connector-j' 
@@ -45,7 +40,10 @@ dependencies {
 
     compileOnly 'org.projectlombok:lombok:1.18.36'
     annotationProcessor 'org.projectlombok:lombok:1.18.36'
-    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // Spring Boot 4 splits the test slices by technology; each brings spring-boot-starter-test
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

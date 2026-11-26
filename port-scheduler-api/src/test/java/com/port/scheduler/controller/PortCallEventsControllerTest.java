@@ -10,8 +10,8 @@ import com.port.scheduler.dcsa.PortCallMessages.PortCallService;
 import com.port.scheduler.dcsa.PortCallMessages.Timestamp;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -37,8 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PortCallEventsControllerTest {
 
     @Autowired MockMvc mvc;
-    @MockBean PortCallEventPublisher publisher;
-    @MockBean PortCallEventReceiver receiver;
+    @MockitoBean PortCallEventPublisher publisher;
+    @MockitoBean PortCallEventReceiver receiver;
 
     @Test
     void eventsAreReturnedInTheStandardsShapeWithItsHeaders() throws Exception {

@@ -59,17 +59,26 @@ prediction* to the Python service.
 | Tool | Version | What it is | Why we use it |
 |------|---------|-----------|---------------|
 | **Java** | 21 (LTS) | The language | Strong typing, huge ecosystem, what Spring Boot runs on |
-| **Spring Boot** | 3.3.5 | App framework | Removes ~90% of the boilerplate of building a Java web service |
-| **Gradle** | 8.10.2 (wrapper) | Build tool | Compiles, manages dependencies, runs the app |
-| **spring-boot-starter-web** | (managed) | Web module | Gives us `@RestController`, embedded Tomcat server, JSON via Jackson |
+| **Spring Boot** | 4.1.3 | App framework | Removes ~90% of the boilerplate of building a Java web service |
+| **Gradle** | 8.14.8 (wrapper) | Build tool | Compiles, manages dependencies, runs the app |
+| **spring-boot-starter-webmvc** | (managed) | Web module | Gives us `@RestController`, embedded Tomcat server, JSON via Jackson (called `spring-boot-starter-web` before Spring Boot 4) |
 | **spring-boot-starter-validation** | (managed) | Validation | The `@NotBlank`, `@Min`, `@Max` checks on requests |
 | **RestClient** | (in spring-web) | HTTP client | How Java calls the Python `/predict` endpoint |
-| **Jackson** | (bundled) | JSON library | Converts Java objects ↔ JSON automatically |
-| **spring-boot-starter-data-jpa** | (managed, Hibernate 6.5) | Persistence | Maps Java entity classes to database tables |
+| **Jackson** | 3 (bundled) | JSON library | Converts Java objects ↔ JSON automatically. Its classes are in `tools.jackson`; the annotations (`@JsonProperty`, `@JsonInclude`) keep `com.fasterxml.jackson.annotation` |
+| **spring-boot-starter-data-jpa** | (managed, Hibernate 7.4) | Persistence | Maps Java entity classes to database tables |
 | **MySQL** | 8.0 | Database | Where berths, vessels, visits and allocations are stored |
-| **Flyway** | (managed) | Schema migrations | Versioned SQL files create the schema; Hibernate only validates against it |
+| **Flyway** | (managed, 12) | Schema migrations | Versioned SQL files create the schema; Hibernate only validates against it. Spring Boot 4 runs them only with `spring-boot-starter-flyway`; `flyway-mysql` adds MySQL |
 | **Lombok** | 1.18.36 | Boilerplate remover | Generates getters/setters on the entity classes |
-| **Spring AI** | 1.1.6 | LLM client | Calls Gemini for the harbor-master agent (§12) |
+| **Spring AI** | 2.0.3 | LLM client | Calls Gemini for the harbor-master agent (§12) |
+
+The service moved from Spring Boot 3.3.5 to 4.1.3 in November 2026: no 3.x
+line has free support any more. The tests use the per-technology test starters
+(`spring-boot-starter-webmvc-test`, `-data-jpa-test`, `-flyway-test`), the
+slice annotations' new packages (`org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest`,
+`org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest`) and
+`@MockitoBean` in place of the removed `@MockBean`. Jackson 3 sorts a class's
+properties alphabetically by default, so `BerthErrorResponse` fixes its order
+with `@JsonPropertyOrder`; records keep their declared order.
 
 A few concepts worth pinning down:
 
@@ -81,7 +90,7 @@ A few concepts worth pinning down:
   the *exact* Gradle version the project needs. Anyone who clones the repo can
   build it without installing Gradle manually. We chose **Gradle over Maven**
   (the Gradle build file is the concise `build.gradle` you'll see below).
-- **"Starter" dependencies:** `spring-boot-starter-web` isn't one library — it's a
+- **"Starter" dependencies:** `spring-boot-starter-webmvc` isn't one library — it's a
   curated bundle (web server + JSON + core Spring). Starters save you from picking
   compatible versions by hand.
 

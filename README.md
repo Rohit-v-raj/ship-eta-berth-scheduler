@@ -299,7 +299,7 @@ src/                  Python pipeline
   train_bigru.py        Bi-GRU head-to-head experiment
   predict_api.py        FastAPI service: /health, /predict
 port-console/         React console (Vite, JavaScript): planner, operator, events, stories
-port-scheduler-api/   Spring Boot 3 / Java 21 / Gradle
+port-scheduler-api/   Spring Boot 4 / Java 21 / Gradle
   controller/           four controllers: DCSA events, operator's calculator, console, assistant
   dcsa/                 DCSA Port Call 2.0: message shapes, publishing, receiving
   service/              visit lifecycle, berth allocation, planning rules

@@ -130,7 +130,7 @@ Response: { eta_minutes: 87, distance_to_dest_nm: 12.3 }
 
 **Goal:** Accept ship requests, fetch ETA from Python, assign berth + queue number.
 
-**Stack (as built):** Java 21, Spring Boot 3.3.5, Gradle, MySQL 8 + Flyway
+**Stack (as built):** Java 21, Spring Boot 4.1.3 (from 3.3.5 in November 2026), Gradle, MySQL 8 + Flyway
 
 ```
 POST /api/ships/schedule
@@ -206,7 +206,7 @@ mvn spring-boot:run
 | scikit-learn, XGBoost | Model training and evaluation |
 | joblib | Saving/loading the trained model |
 | FastAPI + Pydantic | Serving ML predictions over HTTP |
-| Java 17 + Spring Boot 3 | REST API, business logic |
+| Java 21 + Spring Boot 4 | REST API, business logic |
 | RestTemplate | Spring Boot → Python HTTP calls |
 | Maven | Spring Boot build and dependency management |
 | Git | Version control |
